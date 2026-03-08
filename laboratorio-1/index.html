@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulador de estados de procesos</title>
+    <link rel="stylesheet" href="index.css">
+</head>
+
+<body>
+    <div class="app">
+        <header class="encabezado">
+            <h1>Simulador de estados de procesos</h1>
+            <p>Visualiza cómo cada tarea cambia entre nuevo, listo, ejecución, espera y terminado.</p>
+        </header>
+
+        <div class="acciones">
+            <button onclick="crearProceso()">Crear proceso</button>
+            <p id="resumen">Total: 0 | Activos: 0 | Terminados: 0</p>
+        </div>
+
+        <div class="contenedor">
+            <section class="columna">
+                <h2>Nuevo <span id="count-nuevo">0</span></h2>
+                <ul id="nuevo" data-estado="nuevo"></ul>
+            </section>
+
+            <section class="columna">
+                <h2>Listo <span id="count-listo">0</span></h2>
+                <ul id="listo" data-estado="listo"></ul>
+            </section>
+
+            <section class="columna">
+                <h2>Ejecución <span id="count-ejecucion">0</span></h2>
+                <ul id="ejecucion" data-estado="ejecución"></ul>
+            </section>
+
+            <section class="columna">
+                <h2>Espera <span id="count-espera">0</span></h2>
+                <ul id="espera" data-estado="espera"></ul>
+            </section>
+
+            <section class="columna">
+                <h2>Terminado <span id="count-terminado">0</span></h2>
+                <ul id="terminado" data-estado="terminado"></ul>
+            </section>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
