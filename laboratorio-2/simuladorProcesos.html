@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulador de Procesos - Por Ticks</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>🔄 Simulador de Procesos (Ticks de CPU)</h1>
+
+        <!-- NUEVA SECCIÓN: Procesos predefinidos -->
+        <div class="procesos-sistema">
+            <div class="sistema-header">
+                <h3>📋 Procesos del Sistema</h3>
+                <button class="btn btn-azul" onclick="simulador.agregarSeleccionados()">
+                    ➕ Agregar Seleccionados
+                </button>
+            </div>
+            <div class="procesos-lista" id="procesosSistema">
+                <!-- Se llenará con JavaScript -->
+            </div>
+        </div>
+
+        <div class="panel-control">
+            <div class="controles-principales">
+                <button class="btn btn-verde" onclick="simulador.iniciar()" id="btnIniciar">
+                    ▶️ Iniciar Simulación
+                </button>
+                <button class="btn btn-rojo" onclick="simulador.pausar()" id="btnPausar" disabled>
+                    ⏸️ Pausar
+                </button>
+                <button class="btn btn-naranja" onclick="simulador.crearProcesoAleatorio()">
+                    🎲 Crear Aleatorio
+                </button>
+                <button class="btn btn-gris" onclick="simulador.resetear()">
+                    🔄 Resetear Todo
+                </button>
+            </div>
+
+            <div class="control-produccion">
+                <span class="switch-label inactivo" id="prodOffLabel">🚫 Producción OFF</span>
+                <label class="switch">
+                    <input type="checkbox" id="produccionAutomatica" checked onchange="simulador.toggleProduccionAutomatica(this.checked)">
+                    <span class="slider"></span>
+                </label>
+                <span class="switch-label activo" id="prodOnLabel">⚡ Producción ON</span>
+            </div>
+
+            <div class="velocidad-control">
+                <span>🐢</span>
+                <input type="range" id="velocidad" min="1" max="10" value="5" onchange="simulador.ajustarVelocidad(this.value)">
+                <span>🐇</span>
+                <span id="velocidadTexto">Velocidad: Normal</span>
+            </div>
+
+            <div class="algoritmo-control">
+                <label for="algoritmoPlanificacion">Algoritmo:</label>
+                <select id="algoritmoPlanificacion" onchange="simulador.cambiarAlgoritmo(this.value)">
+                    <option value="FCFS" selected>FCFS (First Come First Served)</option>
+                    <option value="SJF">SJF (Shortest Job First)</option>
+                    <option value="SRTF">SRTF (Shortest Remaining Time First)</option>
+                </select>
+                <span id="algoritmoActualTexto">Actual: FCFS</span>
+            </div>
+
+            <div class="crear-proceso">
+                <input type="text" id="nombreProceso" placeholder="Nombre del proceso" value="Proceso">
+                <select id="tiempoProceso">
+                    <option value="2">Corto (2 ticks)</option>
+                    <option value="4" selected>Medio (4 ticks)</option>
+                    <option value="6">Largo (6 ticks)</option>
+                    <option value="8">Muy largo (8 ticks)</option>
+                </select>
+                <button onclick="simulador.crearProcesoManual()">➕ Crear Proceso</button>
+            </div>
+        </div>
+
+        <div class="grid-estados">
+            <div class="estado-columna nuevo">
+                <div class="estado-titulo">🆕 NUEVOS</div>
+                <div class="procesos-container" id="nuevos" onclick="simulador.seleccionarProceso(event)"></div>
+            </div>
+
+            <div class="estado-columna listo">
+                <div class="estado-titulo">✅ LISTOS</div>
+                <div class="procesos-container" id="listos" onclick="simulador.seleccionarProceso(event)"></div>
+            </div>
+
+            <div class="estado-columna ejecucion">
+                <div class="estado-titulo">⚡ EN EJECUCIÓN</div>
+                <div class="procesos-container" id="ejecucion" onclick="simulador.seleccionarProceso(event)"></div>
+            </div>
+
+            <div class="estado-columna bloqueado">
+                <div class="estado-titulo">⛔ BLOQUEADOS</div>
+                <div class="procesos-container" id="bloqueados" onclick="simulador.seleccionarProceso(event)"></div>
+            </div>
+
+            <div class="estado-columna terminado">
+                <div class="estado-titulo">✅ TERMINADOS</div>
+                <div class="procesos-container" id="terminados" onclick="simulador.seleccionarProceso(event)"></div>
+            </div>
+        </div>
+
+        <div class="panel-historial">
+            <div class="historial-header">
+                <h2 style="color: #2c3e50;">📋 Historial de Eventos</h2>
+                <div class="filtro-proceso">
+                    <select id="filtroProceso" onchange="simulador.filtrarHistorial(this.value)">
+                        <option value="todos">🎯 Todos los procesos</option>
+                    </select>
+                    <button class="btn-gris" onclick="simulador.limpiarHistorial()">
+                        🗑️ Limpiar
+                    </button>
+                </div>
+            </div>
+            <div class="historial-lista" id="historial">
+                <!-- Aquí se mostrarán los eventos -->
+            </div>
+        </div>
+
+        <div class="panel-timeline">
+            <div class="timeline-header">
+                <h2>🧭 Historial Visual por Ticks</h2>
+                <div class="timeline-leyenda">
+                    <span class="chip estado-nuevo">N: Nuevo</span>
+                    <span class="chip estado-listo">L: Listo</span>
+                    <span class="chip estado-ejecucion">E: Ejecución</span>
+                    <span class="chip estado-bloqueado">B: Bloqueado</span>
+                    <span class="chip estado-terminado">T: Terminado</span>
+                </div>
+            </div>
+            <div class="timeline-wrapper" id="timelineWrapper">
+                <table class="timeline-table" id="tablaTimeline"></table>
+            </div>
+        </div>
+
+        <div class="panel-metricas">
+            <div class="metricas-header">
+                <h2>📊 Métricas de Planificación</h2>
+            </div>
+            <div class="metricas-wrapper">
+                <table class="metricas-table" id="tablaMetricas"></table>
+            </div>
+        </div>
+
+        <div class="stats-panel">
+            <div class="stat-card">
+                <div class="stat-valor" id="totalProcesos">0</div>
+                <div class="stat-label">Total Procesos</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-valor" id="procesosActivos">0</div>
+                <div class="stat-label">Procesos Activos</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-valor" id="procesosTerminados">0</div>
+                <div class="stat-label">Terminados</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-valor" id="ticksCPU">0</div>
+                <div class="stat-label">Ticks de CPU</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-valor" id="totalEventos">0</div>
+                <div class="stat-label">Eventos Registrados</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
