@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gestión de Memoria - Vanilla JS</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="App" id="app">
+      <div class="nav-Container">
+        <div class="btnMenu">
+          <button class="sideBar_button" id="toggleSidebar">☰ Tipo de Gestión</button>
+        </div>
+        <div class="form">
+          <button class="program-button" id="openForm">Agregar Programa</button>
+        </div>
+      </div>
+
+      <div class="container">
+        <aside id="sidebar" class="sidebar_Close"></aside>
+
+        <div class="app-container">
+          <div id="overlay" class="layer hidden"></div>
+          <section class="program_container" id="programContainer"></section>
+          <section id="board" class="tablero_Open"></section>
+        </div>
+      </div>
+    </div>
+
+    <script defer src="./app.js"></script>
+  </body>
+</html>
