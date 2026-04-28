@@ -1,4 +1,9 @@
 const MB = 1024 * 1024;
+const TOTAL_MEMORY_BYTES = 16 * MB;
+const MAX_ADDRESS = TOTAL_MEMORY_BYTES - 1;
+const OS_RESERVED_BYTES = 1 * MB;
+const USER_MEMORY_BYTES = TOTAL_MEMORY_BYTES - OS_RESERVED_BYTES;
+const USER_MEMORY_START = OS_RESERVED_BYTES;
 
 const DEFAULT_PROGRAMS = [
   { key: 1, id: 0, name: "NotePad", txt: 195240, data: 12352, bss: 1165 },
@@ -38,7 +43,7 @@ const state = {
   programs: [],
   selectedPrograms: [],
   process: [],
-  memoryState: [1048576, 15728640],
+  memoryState: [OS_RESERVED_BYTES, USER_MEMORY_BYTES],
   segmentBits: 0,
   offset: 0,
   isSidebarOpen: false,
@@ -56,11 +61,13 @@ const ui = {
   programContainer: document.getElementById("programContainer"),
   toggleSidebar: document.getElementById("toggleSidebar"),
   openForm: document.getElementById("openForm"),
+  stackPanel: document.getElementById("stackPanel"),
+  debugFill: document.getElementById("debugFill"),
 };
 
 function GetIndexFA(processes, memoryProcess) {
   for (let i = 0; i < processes.length; i += 1) {
-    if (processes[i].partitionBytes > memoryProcess && processes[i].id === 0) return i;
+    if (processes[i].partitionBytes >= memoryProcess && processes[i].id === 0) return i;
   }
   return -1;
 }
@@ -86,7 +93,7 @@ function GetIndexWA(processes, memoryProcess) {
   let index = -1;
   let max = 0;
   for (let i = 0; i < processes.length; i += 1) {
-    if (processes[i].partitionBytes > memoryProcess && processes[i].id === 0 && max <= processes[i].partitionBytes) {
+    if (processes[i].partitionBytes >= memoryProcess && processes[i].id === 0 && max <= processes[i].partitionBytes) {
       index = i;
       max = processes[i].partitionBytes;
     }
@@ -99,17 +106,21 @@ function getCurrentAlgorithm() {
     case "/dinamico-con-compactacion":
       return { fn: GetIndexFA, name: "Dinámico con compactación - Primer Ajuste" };
     case "/dinamico-sin-compactacion/peor-ajuste":
-    case "/variable/peor-ajuste":
-      return { fn: GetIndexWA, name: "Variable - Peor Ajuste" };
+      return { fn: GetIndexWA, name: "Dinámico sin compactación - Peor Ajuste" };
     case "/dinamico-sin-compactacion/mejor-ajuste":
-    case "/variable/mejor-ajuste":
-      return { fn: GetIndexBA, name: "Variable - Mejor Ajuste" };
+      return { fn: GetIndexBA, name: "Dinámico sin compactación - Mejor Ajuste" };
     case "/dinamico-sin-compactacion/primer-ajuste":
       return { fn: GetIndexFA, name: "Dinámico sin compactación - Primer Ajuste" };
+    case "/variable/peor-ajuste":
+      return { fn: GetIndexWA, name: "Variable estático - Peor Ajuste" };
+    case "/variable/mejor-ajuste":
+      return { fn: GetIndexBA, name: "Variable estático - Mejor Ajuste" };
+    case "/variable/primer-ajuste":
+      return { fn: GetIndexFA, name: "Variable estático - Primer Ajuste" };
     case "/static":
-      return { fn: GetIndexFA, name: "Estático" };
+      return { fn: GetIndexFA, name: "Estático tamaño fijo - Primer Ajuste" };
     default:
-      return { fn: GetIndexFA, name: "Variable - Primer Ajuste" };
+      return { fn: GetIndexFA, name: "Variable estático - Primer Ajuste" };
   }
 }
 
@@ -148,38 +159,88 @@ function createFreeProcess(index, base, partitionBytes) {
   });
 }
 
+function isStaticFixedRoute(route) {
+  return route === "/static";
+}
+
+function isStaticVariableRoute(route) {
+  return route.startsWith("/variable");
+}
+
+function isDynamicNoCompactionRoute(route) {
+  return route.startsWith("/dinamico-sin-compactacion");
+}
+
+function isDynamicCompactionRoute(route) {
+  return route === "/dinamico-con-compactacion";
+}
+
+function isDynamicRoute(route) {
+  return isDynamicNoCompactionRoute(route) || isDynamicCompactionRoute(route);
+}
+
+function getUsedBytes(processes) {
+  return processes.filter((process) => process.id !== 0).reduce((sum, process) => sum + process.partitionBytes, 0);
+}
+
+function getFreeBytes(processes) {
+  return processes.filter((process) => process.id === 0).reduce((sum, process) => sum + process.partitionBytes, 0);
+}
+
+function assertAddressingInvariant(processes) {
+  let cursor = USER_MEMORY_START;
+
+  for (const process of processes) {
+    if (process.base !== cursor) return false;
+    cursor += process.partitionBytes;
+  }
+
+  return cursor - 1 === MAX_ADDRESS;
+}
+
 function restartElements() {
   state.selectedPrograms = [];
-  state.memoryState = [1048576, 15728640];
+  state.memoryState = [OS_RESERVED_BYTES, USER_MEMORY_BYTES];
   state.process = [];
   state.segmentBits = 0;
   state.offset = 0;
   state.staticPartitionMB = 0;
 }
 
-function calcBases(partitionSizesMB) {
+function calcBases(partitionSizesBytes) {
   const bases = [];
-  let sum = 1048576;
-  for (let i = 0; i < partitionSizesMB.length; i += 1) {
+  let sum = USER_MEMORY_START;
+  for (let i = 0; i < partitionSizesBytes.length; i += 1) {
     bases[i] = sum;
-    sum += partitionSizesMB[i] * MB;
+    sum += partitionSizesBytes[i];
   }
   return bases;
 }
 
+function createLayoutFromSizes(partitionSizesBytes) {
+  const bases = calcBases(partitionSizesBytes);
+  return bases.map((base, index) => createFreeProcess(index, base, partitionSizesBytes[index]));
+}
+
 function initVariableProcesses() {
   if (state.process.length > 0) return;
-  const partitionSizes = [0.5, 0.5, 1, 1, 2, 2, 4, 4];
-  const bases = calcBases(partitionSizes);
-  state.process = bases.map((base, index) => createFreeProcess(index, base, partitionSizes[index] * MB));
+  const partitionSizesBytes = [0.5, 0.5, 1, 1, 2, 2, 4, 4].map((size) => size * MB);
+  state.process = createLayoutFromSizes(partitionSizesBytes);
 }
 
 function initStaticProcesses() {
   if (!state.staticPartitionMB || state.process.length > 0) return;
-  const repeats = Math.floor(15 / state.staticPartitionMB);
-  const partitionSizes = Array(repeats).fill(state.staticPartitionMB);
-  const bases = calcBases(partitionSizes);
-  state.process = bases.map((base, index) => createFreeProcess(index, base, partitionSizes[index] * MB));
+  const partitionBytes = state.staticPartitionMB * MB;
+  const repeats = USER_MEMORY_BYTES / partitionBytes;
+  if (!Number.isInteger(repeats) || repeats <= 0) return;
+
+  const partitionSizesBytes = Array(repeats).fill(partitionBytes);
+  state.process = createLayoutFromSizes(partitionSizesBytes);
+}
+
+function initDynamicProcesses() {
+  if (state.process.length > 0) return;
+  state.process = [createFreeProcess(0, USER_MEMORY_START, USER_MEMORY_BYTES)];
 }
 
 function getRouteDefinition(route) {
@@ -203,20 +264,17 @@ function normalizeRoute(rawRoute) {
 function setRoute(route) {
   const normalizedRoute = normalizeRoute(route);
   const routeDef = getRouteDefinition(normalizedRoute);
+  const isKnownRoute = Boolean(routeDef) || normalizedRoute === "/form";
 
-  state.currentRoute = routeDef || normalizedRoute === "/form" ? normalizedRoute : "/form";
+  state.currentRoute = isKnownRoute ? normalizedRoute : "/form";
   state.isFormOpen = state.currentRoute === "/form";
 
   if (!state.isFormOpen) {
     restartElements();
-    if (
-      routeDef?.implemented &&
-      (state.currentRoute.startsWith("/variable") ||
-        state.currentRoute.startsWith("/dinamico-sin-compactacion") ||
-        state.currentRoute === "/dinamico-con-compactacion")
-    ) {
+    if (routeDef?.implemented && isStaticVariableRoute(state.currentRoute)) {
       initVariableProcesses();
     }
+    if (routeDef?.implemented && isDynamicRoute(state.currentRoute)) initDynamicProcesses();
   }
 
   renderAll();
@@ -230,14 +288,11 @@ function assignLastSelectedProgram() {
   const def = getRouteDefinition(state.currentRoute);
   if (!def?.implemented) return;
 
-  if (state.currentRoute === "/static") initStaticProcesses();
-  if (
-    state.currentRoute.startsWith("/variable") ||
-    state.currentRoute.startsWith("/dinamico-sin-compactacion") ||
-    state.currentRoute === "/dinamico-con-compactacion"
-  ) {
+  if (isStaticFixedRoute(state.currentRoute)) initStaticProcesses();
+  if (isStaticVariableRoute(state.currentRoute)) {
     initVariableProcesses();
   }
+  if (isDynamicRoute(state.currentRoute)) initDynamicProcesses();
 
   const { fn } = getCurrentAlgorithm();
   const lastProgram = state.selectedPrograms[state.selectedPrograms.length - 1];
@@ -249,7 +304,18 @@ function assignLastSelectedProgram() {
   if (!lastProgram || existence) return;
 
   const memoryProcess = Number(lastProgram.txt) + Number(lastProgram.data) + Number(lastProgram.bss) + heap + stack;
-  const index = fn(state.process, memoryProcess);
+  if (memoryProcess > USER_MEMORY_BYTES) {
+    deleteSelectedProgram(lastProgram);
+    alert("El proceso excede la memoria de usuario disponible (15 MiB)");
+    return;
+  }
+
+  let index = fn(state.process, memoryProcess);
+
+  if (index === -1 && isDynamicCompactionRoute(state.currentRoute) && getFreeBytes(state.process) >= memoryProcess) {
+    compactMemory();
+    index = fn(state.process, memoryProcess);
+  }
 
   if (index === -1) {
     deleteSelectedProgram(lastProgram);
@@ -258,6 +324,7 @@ function assignLastSelectedProgram() {
   }
 
   const target = state.process[index];
+  const allocatedBytes = isDynamicRoute(state.currentRoute) ? memoryProcess : target.partitionBytes;
   const newProcess = createProcess({
     heap,
     stack,
@@ -268,10 +335,28 @@ function assignLastSelectedProgram() {
     data: Number(lastProgram.data),
     txt: Number(lastProgram.txt),
     base: target.base,
-    partitionBytes: target.partitionBytes,
+    partitionBytes: allocatedBytes,
   });
 
-  state.process = [...state.process.slice(0, index), newProcess, ...state.process.slice(index + 1)];
+  if (!isDynamicRoute(state.currentRoute)) {
+    state.process = [...state.process.slice(0, index), newProcess, ...state.process.slice(index + 1)];
+    return;
+  }
+
+  const remaining = target.partitionBytes - memoryProcess;
+
+  if (remaining === 0) {
+    state.process = [...state.process.slice(0, index), newProcess, ...state.process.slice(index + 1)];
+  } else {
+    const tail = createFreeProcess(index + 1, target.base + memoryProcess, remaining);
+    state.process = [...state.process.slice(0, index), newProcess, tail, ...state.process.slice(index + 1)];
+  }
+
+  if (!assertAddressingInvariant(state.process)) {
+    alert("Se detectó una inconsistencia de direccionamiento de memoria");
+    restartElements();
+    setRoute(state.currentRoute);
+  }
 }
 
 function deleteProcessById(id) {
@@ -284,30 +369,56 @@ function deleteProcessById(id) {
   state.process = [...state.process.slice(0, index), free, ...state.process.slice(index + 1)];
   deleteSelectedProgram(current);
 
-  if (state.currentRoute === "/dinamico-con-compactacion") {
+  if (isDynamicRoute(state.currentRoute)) {
+    mergeAdjacentFreeBlocks();
+  }
+
+  if (isDynamicCompactionRoute(state.currentRoute)) {
     compactMemory();
   }
 
   renderBoard();
 }
 
-function compactMemory() {
-  const occupied = state.process.filter((process) => process.id !== 0);
-  const free = state.process.filter((process) => process.id === 0);
+function mergeAdjacentFreeBlocks() {
+  if (!isDynamicRoute(state.currentRoute) || state.process.length === 0) return;
 
-  const compacted = [...occupied, ...free].map((process, index) => {
-    const slot = state.process[index];
+  const merged = [];
 
-    if (process.id === 0) {
-      return createFreeProcess(index, slot.base, slot.partitionBytes);
+  for (const block of state.process) {
+    const last = merged[merged.length - 1];
+    if (last && last.id === 0 && block.id === 0) {
+      last.partitionBytes += block.partitionBytes;
+      last.txt = last.partitionBytes;
+      last.memory = last.partitionBytes;
+      continue;
     }
+    merged.push({ ...block });
+  }
 
-    return {
+  state.process = merged;
+}
+
+function compactMemory() {
+  if (!isDynamicRoute(state.currentRoute)) return;
+
+  const occupied = state.process.filter((process) => process.id !== 0);
+  const compacted = [];
+  let nextBase = USER_MEMORY_START;
+
+  for (const process of occupied) {
+    compacted.push({
       ...process,
-      base: slot.base,
-      partitionBytes: slot.partitionBytes,
-    };
-  });
+      base: nextBase,
+      partitionBytes: process.partitionBytes,
+    });
+    nextBase += process.partitionBytes;
+  }
+
+  const freeBytes = USER_MEMORY_BYTES - getUsedBytes(compacted);
+  if (freeBytes > 0) {
+    compacted.push(createFreeProcess(compacted.length, nextBase, freeBytes));
+  }
 
   state.process = compacted;
 }
@@ -326,16 +437,64 @@ function pickProgram(program) {
 }
 
 function formatHex(value) {
-  return Number(value).toString(16);
+  return Number(value).toString(16).toUpperCase().padStart(6, "0");
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes);
+  if (value >= MB) return `${(value / MB).toFixed(2)} MiB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KiB`;
+  return `${value} B`;
+}
+
+function renderMemorySummary(processes, modeName) {
+  const used = getUsedBytes(processes);
+  const free = getFreeBytes(processes);
+  const occupiedBlocks = processes.filter((process) => process.id !== 0).length;
+  const freeBlocks = processes.filter((process) => process.id === 0).length;
+  const occupancy = Math.round((used / USER_MEMORY_BYTES) * 100);
+
+  return `
+    <section class="memory-summary" aria-label="Resumen de memoria">
+      <div class="summary-title">${modeName}</div>
+      <div class="summary-grid">
+        <article class="summary-card summary-card-used">
+          <span>Uso</span>
+          <strong>${formatBytes(used)}</strong>
+        </article>
+        <article class="summary-card summary-card-free">
+          <span>Libre</span>
+          <strong>${formatBytes(free)}</strong>
+        </article>
+        <article class="summary-card">
+          <span>Particiones ocupadas</span>
+          <strong>${occupiedBlocks}</strong>
+        </article>
+        <article class="summary-card">
+          <span>Huecos libres</span>
+          <strong>${freeBlocks}</strong>
+        </article>
+      </div>
+      <div class="memory-legend" aria-label="Leyenda de memoria">
+        <div class="legend-item"><span class="legend-swatch legend-swatch-used"></span><span>Proceso usado</span></div>
+        <div class="legend-item"><span class="legend-swatch legend-swatch-free"></span><span>Espacio libre</span></div>
+        <div class="legend-item"><span class="legend-swatch legend-swatch-os"></span><span>Sistema operativo</span></div>
+      </div>
+      <div class="occupancy-wrap">
+        <div class="occupancy-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${occupancy}">
+          <div class="occupancy-fill" style="width:${occupancy}%"></div>
+        </div>
+        <span class="occupancy-label">Ocupación: ${occupancy}%</span>
+      </div>
+    </section>`;
 }
 
 function renderTable(processes, modeName) {
   const rows = processes
-    .map((process, rowIndex) => {
+    .map((process) => {
       const pid = process.id === 0 ? 0 : `P${process.id}`;
-      const color = rowIndex % 2 === 0 ? "#DBE2EF" : "#F9F7F7";
       return `
-        <tr style="background-color:${color}">
+        <tr>
           <td>${pid}</td>
           <td>${process.partitionBytes}</td>
           <td>${process.base}</td>
@@ -362,7 +521,7 @@ function renderTable(processes, modeName) {
         <tbody>
           <tr>
             <td>SO</td>
-            <td>1048576</td>
+              <td>${OS_RESERVED_BYTES}</td>
             <td>0</td>
             <td>000000</td>
           </tr>
@@ -377,31 +536,80 @@ function renderStack(processes) {
 
   const stack = reversed
     .map((process) => {
-      const totalHeight = (process.partitionBytes * 37) / MB;
+      // aumentar la altura vertical de los bloques para mejor lectura
+      const totalHeight = Math.max(120, (process.partitionBytes * 75) / MB);
 
       if (process.id === 0) {
-        return `<div class="partition" style="background-color:#205295;height:${totalHeight}px"></div>`;
+        return `
+          <article class="stack-block stack-block-free" style="min-height:${totalHeight}px">
+            <div class="stack-block-inner">
+              <div class="stack-block-top">
+                <span class="stack-pill">Hueco libre</span>
+                <span class="stack-bytes">${formatBytes(process.partitionBytes)}</span>
+              </div>
+              <div class="stack-block-body">
+                <div class="stack-block-title">Espacio disponible</div>
+                <div class="stack-block-range">${formatHex(process.base)} - ${formatHex(process.base + process.partitionBytes - 1)}</div>
+                <div class="stack-mini-meter" aria-hidden="true"><span style="width:100%"></span></div>
+                <div class="stack-block-meta">
+                  <span>Fragmento libre</span>
+                  <span>${formatBytes(process.partitionBytes)}</span>
+                </div>
+              </div>
+            </div>
+          </article>`;
       }
 
-      const remaining = Math.max(0, process.partitionBytes - process.memory);
-      const remainingHeight = (remaining * 37) / MB;
-      const usedHeight = (process.memory * 37) / MB;
+      const usedRatio = process.partitionBytes > 0 ? (process.memory / process.partitionBytes) * 100 : 0;
+      const usedPercentage = Math.max(6, Math.min(100, Math.round(usedRatio)));
+      const freeBytes = Math.max(0, process.partitionBytes - process.memory);
+      const isCompact = totalHeight < 118;
+      const isTiny = totalHeight < 86;
+
+      const modeClass = isTiny ? "is-tiny" : isCompact ? "is-compact" : "";
 
       return `
-        <div class="container_partition" style="width:100%">
-          <div class="partition" style="background-color:#205295;height:${remainingHeight}px"></div>
-          <div class="partition" style="background-color:#8b0000;height:${usedHeight}px">
-            <div class="position">${formatHex(process.base)} - ${formatHex(process.base + process.memory)}</div>
-            <button data-delete-id="${process.id}">${process.name}</button>
+        <article class="stack-block stack-block-used ${modeClass}" style="min-height:${totalHeight}px">
+          <div class="stack-block-inner">
+            <div class="stack-block-top">
+              <span class="stack-pill stack-pill-used">${process.name}</span>
+              <span class="stack-bytes">${formatBytes(process.memory)} usados</span>
+            </div>
+            <div class="stack-block-body">
+              <div class="stack-block-title">${process.name}</div>
+              <div class="stack-block-range">${formatHex(process.base)} - ${formatHex(process.base + process.partitionBytes - 1)}</div>
+              <div class="stack-mini-meter" aria-hidden="true">
+                <span style="width:${usedPercentage}%"></span>
+              </div>
+              <div class="stack-block-meta">
+                <span>${formatBytes(process.memory)} ocupados</span>
+                <span>${formatBytes(freeBytes)} libres</span>
+              </div>
+              <button class="stack-action" data-delete-id="${process.id}" aria-label="Liberar ${process.name}">Liberar</button>
+            </div>
           </div>
-        </div>`;
+        </article>`;
     })
     .join("");
 
   return `
-    <div id="memoria">
-      ${stack}
-      <div class="partition" style="background-color:#00913F;height:37px"><p>Sistema Operativo</p></div>
+    <div id="memoria" class="stack-panel">
+      <div class="stack-header">
+        <div>
+          <span class="stack-eyebrow">Memoria de usuario</span>
+          <h2 class="stack-title">Pila</h2>
+        </div>
+        <div class="stack-direction">
+          <span>Dirección alta</span>
+          <span>Dirección baja</span>
+        </div>
+      </div>
+      <div class="stack-track">
+        ${stack}
+        <article class="stack-block stack-block-os" style="min-height:80px">
+          <span>Sistema Operativo</span>
+        </article>
+      </div>
     </div>`;
 }
 
@@ -447,25 +655,48 @@ function renderForm() {
 }
 
 function renderProgramContainer() {
-  const buttons = state.programs
+  const cards = state.programs
     .map(
       (program) => `
-      <div class="buttonContainer">
-        <button class="botonesP" data-pick-key="${program.key}">${program.name}</button>
-        <span class="info" title="Txt: ${program.txt} | Data: ${program.data} | Bss: ${program.bss}">ⓘ</span>
-      </div>`,
+      <article class="program-card" data-pick-key="${program.key}" tabindex="0" role="button" aria-label="Cargar ${program.name}">
+        <div class="program-card-head">
+          <button class="botonesP" data-pick-key="${program.key}">${program.name}</button>
+          <span class="info">${formatBytes(Number(program.txt) + Number(program.data) + Number(program.bss))}</span>
+        </div>
+        <div class="program-meta">
+          <span><strong>.txt</strong> ${formatBytes(program.txt)}</span>
+          <span><strong>.data</strong> ${formatBytes(program.data)}</span>
+          <span><strong>.bss</strong> ${formatBytes(program.bss)}</span>
+        </div>
+      </article>`,
     )
     .join("");
 
+  const loadedPids = state.process.filter((process) => process.id !== 0).length;
+  const availableCatalog = state.programs.length;
+
+  const quickStats = `
+    <div class="program-overview">
+      <div class="overview-item">
+        <span>Catálogo</span>
+        <strong>${availableCatalog}</strong>
+      </div>
+      <div class="overview-item">
+        <span>En memoria</span>
+        <strong>${loadedPids}</strong>
+      </div>
+    </div>`;
+
   const empty =
     state.programs.length === 0
-      ? '<p style="color:white;text-align:center;width:100%;padding:12px">No hay programas cargados</p>'
+      ? '<p class="empty-programs">No hay programas cargados</p>'
       : "";
 
   ui.programContainer.innerHTML = `
     <h1>Programas</h1>
+    ${quickStats}
     <div class="programs">
-      <div class="botonesProgramas">${buttons}${empty}</div>
+      <div class="botonesProgramas">${cards}${empty}</div>
     </div>`;
 }
 
@@ -498,6 +729,10 @@ function renderSidebar() {
 }
 
 function renderBoard() {
+  // Guardar scroll position de #memoria antes de renderizar (si existe)
+  const memoriaElement = document.getElementById('memoria');
+  const memoriaScrollTop = memoriaElement?.scrollTop || 0;
+
   if (state.isFormOpen) {
     ui.board.innerHTML = renderForm();
     return;
@@ -514,17 +749,27 @@ function renderBoard() {
     return;
   }
 
-  if (state.currentRoute === "/static") initStaticProcesses();
-  if (
-    state.currentRoute.startsWith("/variable") ||
-    state.currentRoute.startsWith("/dinamico-sin-compactacion") ||
-    state.currentRoute === "/dinamico-con-compactacion"
-  ) {
+  if (isStaticFixedRoute(state.currentRoute)) initStaticProcesses();
+  if (isStaticVariableRoute(state.currentRoute)) {
     initVariableProcesses();
   }
+  if (isDynamicRoute(state.currentRoute)) initDynamicProcesses();
 
   const mode = getCurrentAlgorithm();
-  ui.board.innerHTML = `${renderTable(state.process, mode.name)}${renderStack(state.process)}`;
+  ui.board.innerHTML = `
+    ${renderMemorySummary(state.process, mode.name)}
+    <section class="board-main">
+      ${renderTable(state.process, mode.name)}
+    </section>`;
+
+  // Renderizar la pila en su contenedor separado
+  if (ui.stackPanel) ui.stackPanel.innerHTML = renderStack(state.process);
+
+  // Restaurar scroll position de #memoria después de renderizar
+  requestAnimationFrame(() => {
+    const newMemoriaElement = document.getElementById('#memoria') || document.getElementById('memoria');
+    if (newMemoriaElement) newMemoriaElement.scrollTop = memoriaScrollTop;
+  });
 }
 
 function renderAll() {
@@ -544,6 +789,48 @@ function bindEvents() {
     state.isFormOpen = true;
     window.location.hash = "#/form";
     renderBoard();
+  });
+
+  ui.debugFill?.addEventListener("click", () => {
+    // Genera un conjunto de procesos (usados y huecos) para probar la pila
+    const partsMB = [1, 0.5, 0.75, 1, 0.5, 2, 0.25, 0.5, 1, 0.75, 0.5, 1];
+    const parts = partsMB.map((m) => Math.round(m * MB));
+    const blocks = [];
+    let base = USER_MEMORY_START;
+    for (let i = 0; i < parts.length; i++) {
+      const pb = parts[i];
+      const isUsed = i % 3 !== 0; // algunos usados, otros libres
+      if (isUsed) {
+        const memUsed = Math.max( Math.round(pb * 0.75), Math.round(pb - (0.05 * MB)) );
+        blocks.push(createProcess({
+          heap: 131072,
+          stack: 65536,
+          key: randomId(),
+          id: randomId(),
+          name: `Tst${i + 1}`,
+          bss: 1024,
+          data: 2048,
+          txt: memUsed - 131072 - 65536 - 1024 - 2048,
+          base,
+          partitionBytes: pb,
+        }));
+      } else {
+        blocks.push(createFreeProcess(blocks.length, base, pb));
+      }
+      base += pb;
+    }
+
+    // si queda espacio residual, agregamos un hueco final
+    const usedSum = blocks.reduce((s, b) => s + b.partitionBytes, 0);
+    const residual = USER_MEMORY_BYTES - usedSum;
+    if (residual > 0) blocks.push(createFreeProcess(blocks.length, base, residual));
+
+    state.process = blocks;
+    state.currentRoute = "/dinamico-con-compactacion";
+    state.isFormOpen = false;
+    renderAll();
+    console.log("Debug: pila rellenada con", state.process.length, "bloques");
+    // no forzamos modo debug visual — mantener estilos limpios
   });
 
   document.addEventListener("click", (event) => {
@@ -578,17 +865,37 @@ function bindEvents() {
     }
   });
 
+  document.addEventListener("keydown", (event) => {
+    const card = event.target.closest(".program-card");
+    if (!card) return;
+    if (event.key !== "Enter" && event.key !== " ") return;
+
+    event.preventDefault();
+    const pickKey = card.getAttribute("data-pick-key");
+    const program = state.programs.find((item) => String(item.key) === String(pickKey));
+    if (program) pickProgram(program);
+  });
+
   document.addEventListener("submit", (event) => {
     if (event.target.id === "programForm") {
       event.preventDefault();
       const formData = new FormData(event.target);
+      const txt = Number(formData.get("dato1"));
+      const data = Number(formData.get("dato2"));
+      const bss = Number(formData.get("dato3"));
+
+      if (txt <= 0 || data < 0 || bss < 0) {
+        alert("Ingrese tamaños válidos para los segmentos (.txt > 0, .data >= 0, .bss >= 0)");
+        return;
+      }
+
       const program = {
         key: randomId(),
         id: 0,
         name: formData.get("nombre"),
-        txt: Number(formData.get("dato1")),
-        data: Number(formData.get("dato2")),
-        bss: Number(formData.get("dato3")),
+        txt,
+        data,
+        bss,
       };
 
       state.programs = [...state.programs, program];
@@ -600,8 +907,13 @@ function bindEvents() {
     if (event.target.id === "staticConfigForm") {
       event.preventDefault();
       const value = Number(document.getElementById("partitionMb").value);
-      if (!value || value <= 0 || value > 15) {
-        alert("Ingrese un tamaño de partición válido entre 1 y 15 MB");
+      if (!value || value <= 0 || value > 15 || !Number.isInteger(value)) {
+        alert("Ingrese un tamaño entero de partición válido entre 1 y 15 MB");
+        return;
+      }
+
+      if (15 % value !== 0) {
+        alert("Para cubrir 15 MiB completos, el tamaño de partición debe dividir 15 exactamente");
         return;
       }
 
@@ -630,7 +942,7 @@ async function loadPrograms() {
         const response = await fetch(candidate);
         if (!response.ok) continue;
         const programs = await response.json();
-        if (Array.isArray(programs) && programs.length > 0) {
+          if (Array.isArray(programs) && programs.length >= 5) {
           state.programs = programs;
           return;
         }
