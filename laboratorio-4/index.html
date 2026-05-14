@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gestión de Memoria - Vanilla JS</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="App" id="app">
+      <div class="nav-Container">
+        <div class="btnMenu">
+          <button class="sideBar_button" id="toggleSidebar">☰ Tipo de Gestión</button>
+        </div>
+        <div class="form">
+          <button class="program-button" id="openForm">Agregar Programa</button>
+          <button class="program-button" id="debugFill" style="margin-left:8px;background:linear-gradient(135deg,#7bc7b5,#2d6f67);">Prueba: llenar pila</button>
+        </div>
+      </div>
+
+      <div class="container">
+        <aside id="sidebar" class="sidebar_Close"></aside>
+
+        <div class="app-container">
+          <div id="overlay" class="layer hidden"></div>
+          <section class="program_container" id="programContainer"></section>
+          <section id="board" class="tablero_Open"></section>
+          
+          <aside id="stackPanel" class="stack-panel-container" aria-label="Panel de pila"></aside>
+        </div>
+      </div>
+    </div>
+
+    <script defer src="./app.js"></script>
+  </body>
+</html>
