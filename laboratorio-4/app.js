@@ -898,16 +898,25 @@ function renderPageTable() {
 
 function renderFrameMap() {
   const pag = state.pagination;
-  const DISPLAY = 512; 
+  const MIN_DISPLAY = 512;
+  let lastUsed = -1;
+  for (let i = pag.frames.length - 1; i >= 0; i--) {
+    if (pag.frames[i] !== null) {
+      lastUsed = i;
+      break;
+    }
+  }
+  const DISPLAY = Math.min(TOTAL_FRAMES, Math.max(MIN_DISPLAY, lastUsed + 1));
+  const START = 0;
   const COLS = 32;
-  const ROWS = Math.ceil(DISPLAY / COLS);
+  const ROWS = Math.ceil((DISPLAY - START) / COLS);
 
   const COLORS = ["#e07c3a","#d45f9a","#6a8fe8","#59b89a","#c97dd4","#e8b04e","#7bc4c4","#a0c45e"];
   const pidColor = {};
   let colorIdx = 0;
 
   let cells = "";
-  for (let i = 0; i < DISPLAY; i++) {
+  for (let i = START; i < DISPLAY; i++) {
     const frame = pag.frames[i];
     if (!frame) {
       cells += `<div class="frame-cell frame-free" title="Marco ${i} – Libre"></div>`;
@@ -926,13 +935,13 @@ function renderFrameMap() {
   return `
     <div id="memoria" class="stack-panel pag-map-panel">
       <div class="stack-header">
-        <div><span class="stack-eyebrow">Vista física (marcos ${0}–${DISPLAY - 1} de ${TOTAL_FRAMES})</span>
+        <div><span class="stack-eyebrow">Vista física (marcos ${START}–${DISPLAY - 1} de ${TOTAL_FRAMES})</span>
           <h2 class="stack-title">Mapa de Marcos</h2></div>
       </div>
       <div class="pag-legend">${legend || '<span style="opacity:.5">Sin procesos</span>'}</div>
       <div class="frame-grid" style="grid-template-columns:repeat(${COLS},1fr)">${cells}</div>
       <div class="pag-map-note">
-        Cada celda = 1 marco = ${formatBytes(PAGE_SIZE)} · Mostrando ${DISPLAY}/${TOTAL_FRAMES} marcos
+        Cada celda = 1 marco = ${formatBytes(PAGE_SIZE)} · Mostrando ${DISPLAY - START}/${TOTAL_FRAMES} marcos
       </div>
     </div>`;
 }
