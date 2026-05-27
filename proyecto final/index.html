@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Segmentación paginada</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Sistemas operativos</p>
+          <h1>Simulador de segmentación paginada para un espacio lógico de 32 bits</h1>
+          <p class="lead">
+            Este programa divide una dirección lógica en segmento, página y desplazamiento,
+            y muestra cómo una página se traduce a un marco físico dentro de una RAM direccionable de <strong>2<sup>32</sup></strong> posiciones.
+          </p>
+        </div>
+
+        <div class="hero-grid">
+          <article class="stat-card">
+            <span>Espacio lógico</span>
+            <strong>2<sup>32</sup> bytes</strong>
+            <small>4 GiB direccionables</small>
+          </article>
+          <article class="stat-card">
+            <span>Segmentos</span>
+            <strong>8</strong>
+            <small>3 bits para el selector de segmento</small>
+          </article>
+          <article class="stat-card">
+            <span>Páginas</span>
+            <strong>Configurables</strong>
+            <small>El tamaño de página define el desplazamiento</small>
+          </article>
+          <article class="stat-card">
+            <span>Objetivo</span>
+            <strong>Traducir</strong>
+            <small>Segmento + página + offset → dirección física</small>
+          </article>
+        </div>
+      </section>
+
+      <section class="content">
+        <div class="panel controls">
+          <div class="panel-head">
+            <h2>Configuración</h2>
+            <p>Define el tamaño de página y los segmentos del proceso.</p>
+          </div>
+
+          <div class="field-grid">
+            <label class="field">
+              <span>Tamaño de página</span>
+              <select id="pageSize">
+                <option value="4096">4 KiB</option>
+                <option value="8192">8 KiB</option>
+                <option value="16384">16 KiB</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>Segmento</span>
+              <select id="segmentSelect"></select>
+            </label>
+
+            <label class="field">
+              <span>Desplazamiento lógico dentro del segmento</span>
+              <input id="offsetInput" type="number" min="0" step="1" value="1024" />
+            </label>
+
+            <label class="field">
+              <span>Marco físico inicial de demo</span>
+              <input id="frameBaseInput" type="number" min="0" step="1" value="2048" />
+            </label>
+          </div>
+
+          <div class="segments-editor">
+            <div class="segments-editor-head">
+              <h3>Segmentos del proceso</h3>
+              <p>Cada segmento se divide internamente en páginas del tamaño elegido.</p>
+            </div>
+
+            <div id="segmentInputs" class="segment-list"></div>
+          </div>
+
+          <div class="actions">
+            <button id="translateBtn" class="primary">Traducir dirección</button>
+            <button id="randomBtn" class="secondary">Ejemplo aleatorio</button>
+            <button id="resetBtn" class="secondary">Restablecer ejemplo</button>
+          </div>
+        </div>
+
+        <div class="panel results">
+          <div class="panel-head">
+            <h2>Resultado de la traducción</h2>
+            <p>La salida muestra el recorrido completo desde la dirección lógica hasta la física.</p>
+          </div>
+
+          <div class="result-grid">
+            <article class="result-card highlight">
+              <span>Dirección lógica</span>
+              <strong id="logicalAddress">-</strong>
+              <small id="logicalBits">-</small>
+            </article>
+            <article class="result-card">
+              <span>Segmento</span>
+              <strong id="segmentResult">-</strong>
+              <small id="segmentRange">-</small>
+            </article>
+            <article class="result-card">
+              <span>Página y offset</span>
+              <strong id="pageResult">-</strong>
+              <small id="offsetResult">-</small>
+            </article>
+            <article class="result-card">
+              <span>Dirección física</span>
+              <strong id="physicalAddress">-</strong>
+              <small id="frameResult">-</small>
+            </article>
+          </div>
+
+          <div id="messageBox" class="message-box"></div>
+
+          <div class="table-wrap">
+            <h3>Tabla de segmentos y páginas</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Segmento</th>
+                  <th>Tamaño</th>
+                  <th>Páginas</th>
+                  <th>Base lógica</th>
+                  <th>Límite</th>
+                  <th>Marco base</th>
+                </tr>
+              </thead>
+              <tbody id="segmentTableBody"></tbody>
+            </table>
+          </div>
+
+          <div class="page-map">
+            <h3>Mapa de páginas del segmento seleccionado</h3>
+            <div id="pageMap" class="page-grid"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel explanation">
+        <div class="panel-head">
+          <h2>Cómo se divide el espacio de direcciones lógicas</h2>
+        </div>
+
+        <div id="explanationText" class="explanation-text"></div>
+      </section>
+    </main>
+
+    <script defer src="./app.js"></script>
+  </body>
+  </html>
