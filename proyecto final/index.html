@@ -87,6 +87,61 @@
             <div id="segmentInputs" class="segment-list"></div>
           </div>
 
+          <div class="process-switcher">
+            <div class="segments-editor-head">
+              <h3>Catálogo de procesos</h3>
+              <p>Selecciona un proceso base o agrega uno nuevo para cargar su distribución de memoria.</p>
+            </div>
+
+            <div id="processCatalog" class="process-catalog"></div>
+
+            <form id="processForm" class="process-form">
+              <div class="process-form-head">
+                <h4>Agregar proceso</h4>
+                <p>Crea un nuevo perfil de proceso para probar otro escenario de memoria.</p>
+              </div>
+
+              <div class="process-form-grid">
+                <label class="field">
+                  <span>Nombre</span>
+                  <input type="text" name="name" value="Nuevo proceso" required />
+                </label>
+                <label class="field">
+                  <span>.txt</span>
+                  <input type="number" name="txt" min="1" step="1" value="262144" required />
+                </label>
+                <label class="field">
+                  <span>.data</span>
+                  <input type="number" name="data" min="0" step="1" value="131072" required />
+                </label>
+                <label class="field">
+                  <span>.bss</span>
+                  <input type="number" name="bss" min="0" step="1" value="65536" required />
+                </label>
+                <label class="field">
+                  <span>Heap</span>
+                  <input type="number" name="heap" min="1" step="1" value="131072" required />
+                </label>
+                <label class="field">
+                  <span>Stack</span>
+                  <input type="number" name="stack" min="1" step="1" value="65536" required />
+                </label>
+              </div>
+
+              <button type="submit" class="secondary process-form-btn">Agregar proceso</button>
+            </form>
+
+            <div class="process-actions">
+              <button type="button" id="saveProgramsBtn" class="secondary">Guardar catálogo</button>
+              <button type="button" id="exportProgramsBtn" class="secondary">Descargar JSON</button>
+              <button type="button" id="restoreProgramsBtn" class="secondary">Restaurar base</button>
+            </div>
+
+            <div id="processMemoryMap" class="process-memory-map"></div>
+
+            <p id="processSummary" class="process-summary"></p>
+          </div>
+
           <div class="actions">
             <button id="translateBtn" class="primary">Traducir dirección</button>
             <button id="randomBtn" class="secondary">Ejemplo aleatorio</button>

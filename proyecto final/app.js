@@ -8,8 +8,20 @@ const DEFAULT_SEGMENTS = [
   { name: "Stack", size: 524288, baseFrame: 4608, maxOffset: 524287 },
 ];
 
+const DEFAULT_PROCESSES = [
+  { key: 1, id: 0, name: "NotePad", txt: 195240, data: 12352, bss: 1165, heap: 131072, stack: 65536 },
+  { key: 2, id: 0, name: "Word", txt: 775390, data: 32680, bss: 4100, heap: 262144, stack: 65536 },
+  { key: 3, id: 0, name: "Excel", txt: 995420, data: 24245, bss: 7557, heap: 524288, stack: 65536 },
+  { key: 4, id: 0, name: "AutoCad", txt: 1150000, data: 123470, bss: 1123, heap: 1048576, stack: 131072 },
+  { key: 5, id: 0, name: "Calculadora", txt: 123420, data: 1246, bss: 1756, heap: 131072, stack: 32768 },
+];
+
+const PROGRAM_STORAGE_KEY = "sistemas-operativos-proyecto-final-programas";
+
 const state = {
   pageSize: 4096,
+  programs: structuredClone(DEFAULT_PROCESSES),
+  selectedProgramIndex: 0,
   segments: structuredClone(DEFAULT_SEGMENTS),
   selectedSegmentIndex: 0,
 };
@@ -20,6 +32,13 @@ const elements = {
   offsetInput: document.getElementById("offsetInput"),
   frameBaseInput: document.getElementById("frameBaseInput"),
   segmentInputs: document.getElementById("segmentInputs"),
+  processCatalog: document.getElementById("processCatalog"),
+  processForm: document.getElementById("processForm"),
+  processMemoryMap: document.getElementById("processMemoryMap"),
+  processSummary: document.getElementById("processSummary"),
+  saveProgramsBtn: document.getElementById("saveProgramsBtn"),
+  exportProgramsBtn: document.getElementById("exportProgramsBtn"),
+  restoreProgramsBtn: document.getElementById("restoreProgramsBtn"),
   translateBtn: document.getElementById("translateBtn"),
   randomBtn: document.getElementById("randomBtn"),
   resetBtn: document.getElementById("resetBtn"),
@@ -91,6 +110,151 @@ function createSegmentInputs() {
   });
 }
 
+function processMemorySize(program) {
+  return Number(program.txt) + Number(program.data) + Number(program.bss) + Number(program.heap) + Number(program.stack);
+}
+
+function normalizeProgram(program, index = 0) {
+  return {
+    key: Number(program.key) || index + 1,
+    id: 0,
+    name: String(program.name || `Proceso ${index + 1}`),
+    txt: Math.max(1, Number(program.txt || 1)),
+    data: Math.max(0, Number(program.data || 0)),
+    bss: Math.max(0, Number(program.bss || 0)),
+    heap: Math.max(1, Number(program.heap || 131072)),
+    stack: Math.max(1, Number(program.stack || 65536)),
+  };
+}
+
+function nextProgramKey() {
+  return state.programs.reduce((maxKey, program) => Math.max(maxKey, Number(program.key) || 0), 0) + 1;
+}
+
+function readStoredPrograms() {
+  try {
+    const raw = localStorage.getItem(PROGRAM_STORAGE_KEY);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+
+    return parsed.map((program, index) => normalizeProgram(program, index));
+  } catch (_) {
+    return null;
+  }
+}
+
+function saveProgramsToStorage(programs) {
+  try {
+    localStorage.setItem(PROGRAM_STORAGE_KEY, JSON.stringify(programs));
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function downloadProgramsJson(programs) {
+  const blob = new Blob([JSON.stringify(programs, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "programas.json";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function buildSegmentsFromProgram(program) {
+  return [
+    { name: "Código", size: Math.max(1, Number(program.txt || 1)), baseFrame: 2048, maxOffset: Math.max(1, Number(program.txt || 1)) - 1 },
+    { name: "Datos", size: Math.max(1, Number(program.data || 1)), baseFrame: 2560, maxOffset: Math.max(1, Number(program.data || 1)) - 1 },
+    { name: "BSS", size: Math.max(1, Number(program.bss || 1)), baseFrame: 3072, maxOffset: Math.max(1, Number(program.bss || 1)) - 1 },
+    { name: "Heap", size: Math.max(1, Number(program.heap || 1)), baseFrame: 3584, maxOffset: Math.max(1, Number(program.heap || 1)) - 1 },
+    { name: "Stack", size: Math.max(1, Number(program.stack || 1)), baseFrame: 4608, maxOffset: Math.max(1, Number(program.stack || 1)) - 1 },
+  ];
+}
+
+function renderProcessSummary() {
+  const program = state.programs[state.selectedProgramIndex];
+  const totalBytes = state.segments.reduce((sum, segment) => sum + segment.size, 0);
+
+  elements.processSummary.innerHTML = `
+    <strong>Proceso activo: ${program.name}</strong><br />
+    Segmentos: ${state.segments.length} · Huella lógica aproximada: ${formatBytes(totalBytes)}<br />
+    Tamaño total del proceso: ${formatBytes(processMemorySize(program))}
+  `;
+}
+
+function renderProcessMemoryMap() {
+  if (!elements.processMemoryMap) return;
+
+  const program = state.programs[state.selectedProgramIndex];
+  const cards = state.segments.map((segment, index) => {
+    const pages = getSegmentPageCount(segment);
+    const logicalBase = getSegmentLogicalBase(index);
+    const logicalLimit = logicalBase + segment.size - 1;
+    const usedBytes = pages * state.pageSize;
+    const occupancy = Math.min(100, (segment.size / usedBytes) * 100);
+    const pagePreviewLimit = 6;
+    const pagePreview = Array.from({ length: Math.min(pages, pagePreviewLimit) }, (_, page) => {
+      const frame = segment.baseFrame + page;
+      return `<span class="memory-pill">P${page} → M${frame}</span>`;
+    }).join("");
+    const remainingPages = pages - pagePreviewLimit;
+
+    return `
+      <article class="memory-segment-card">
+        <div class="memory-segment-head">
+          <div>
+            <strong>${segment.name}</strong>
+            <span>${formatBytes(segment.size)} · ${pages} páginas</span>
+          </div>
+          <small>${formatHex(logicalBase)} - ${formatHex(logicalLimit)}</small>
+        </div>
+        <div class="memory-fill" aria-hidden="true">
+          <span style="width:${occupancy.toFixed(2)}%"></span>
+        </div>
+        <div class="memory-segment-meta">
+          <span>Marco base ${segment.baseFrame}</span>
+          <span>Marco final ${segment.baseFrame + pages - 1}</span>
+        </div>
+        <div class="memory-pills">
+          ${pagePreview}
+          ${remainingPages > 0 ? `<span class="memory-pill memory-pill--more">+${remainingPages} páginas</span>` : ""}
+        </div>
+      </article>
+    `;
+  }).join("");
+
+  elements.processMemoryMap.innerHTML = cards || `<div class="empty">No hay segmentos para mostrar en ${program.name}.</div>`;
+}
+
+function renderProcessCatalog() {
+  if (!elements.processCatalog) return;
+
+  const cards = state.programs.map((program, index) => {
+    const isActive = index === state.selectedProgramIndex ? "process-card--active" : "";
+    return `
+      <article class="process-card ${isActive}" data-pick-key="${program.key}" tabindex="0" role="button" aria-label="Cargar ${program.name}">
+        <div class="process-card-head">
+          <button class="process-card-button" data-pick-key="${program.key}">${program.name}</button>
+          <span class="process-card-size">${formatBytes(processMemorySize(program))}</span>
+        </div>
+        <div class="process-card-meta">
+          <span><strong>.txt</strong> ${formatBytes(program.txt)}</span>
+          <span><strong>.data</strong> ${formatBytes(program.data)}</span>
+          <span><strong>.bss</strong> ${formatBytes(program.bss)}</span>
+          <span><strong>heap</strong> ${formatBytes(program.heap)}</span>
+          <span><strong>stack</strong> ${formatBytes(program.stack)}</span>
+        </div>
+      </article>`;
+  }).join("");
+
+  elements.processCatalog.innerHTML = cards;
+}
+
 function createSegmentOptions() {
   elements.segmentSelect.innerHTML = "";
   state.segments.forEach((segment, index) => {
@@ -122,6 +286,62 @@ function updateSegmentFromInputs() {
     const index = Number(input.dataset.segmentFrame);
     state.segments[index].baseFrame = Math.max(0, Number(input.value || 0));
   });
+}
+
+function applyProcessProgram(programIndex) {
+  const program = state.programs[programIndex];
+
+  state.selectedProgramIndex = programIndex;
+  state.segments = buildSegmentsFromProgram(program);
+  state.selectedSegmentIndex = 0;
+
+  createSegmentInputs();
+  createSegmentOptions();
+  syncInputsFromState();
+  elements.offsetInput.value = String(Math.min(Number(elements.offsetInput.value || 1024), state.segments[0].size - 1));
+  renderProcessCatalog();
+  renderSegmentsTable();
+  renderPageMap(0);
+  renderProcessSummary();
+  renderProcessMemoryMap();
+  renderExplanation();
+  renderTranslation();
+}
+
+function addProcessProfile(program) {
+  const newProgram = { ...normalizeProgram(program, state.programs.length), key: nextProgramKey(), id: 0 };
+  state.programs = [...state.programs, newProgram];
+  saveProgramsToStorage(state.programs);
+  return state.programs.length - 1;
+}
+
+async function loadPrograms() {
+  const storedPrograms = readStoredPrograms();
+  if (storedPrograms) {
+    state.programs = storedPrograms;
+    return;
+  }
+
+  const sources = ["./programas.json", "programas.json"];
+
+  for (const source of sources) {
+    try {
+      const response = await fetch(source);
+      if (!response.ok) continue;
+
+      const programs = await response.json();
+      if (Array.isArray(programs) && programs.length > 0) {
+        state.programs = programs.map((program, index) => normalizeProgram(program, index));
+        saveProgramsToStorage(state.programs);
+        return;
+      }
+    } catch (_) {
+      continue;
+    }
+  }
+
+  state.programs = structuredClone(DEFAULT_PROCESSES);
+  saveProgramsToStorage(state.programs);
 }
 
 function getSegmentPageCount(segment) {
@@ -283,21 +503,21 @@ function renderTranslation() {
   );
 
   renderPageMap(segmentIndex);
+  renderProcessMemoryMap();
   renderExplanation();
 }
 
 function resetExample() {
   state.pageSize = 4096;
-  state.segments = structuredClone(DEFAULT_SEGMENTS);
+  state.selectedProgramIndex = 0;
+  applyProcessProgram(0);
   state.selectedSegmentIndex = 0;
   elements.pageSize.value = "4096";
   elements.segmentSelect.value = "0";
   elements.offsetInput.value = "1024";
   elements.frameBaseInput.value = String(state.segments[0].baseFrame);
-  createSegmentInputs();
-  createSegmentOptions();
-  renderSegmentsTable();
-  renderTranslation();
+  renderProcessSummary();
+  renderProcessMemoryMap();
 }
 
 function randomExample() {
@@ -317,16 +537,85 @@ function randomExample() {
 
   renderSegmentsTable();
   renderPageMap(state.selectedSegmentIndex);
+  renderProcessMemoryMap();
   renderTranslation();
 }
 
 function bootstrap() {
+  renderProcessCatalog();
   createSegmentInputs();
   createSegmentOptions();
   renderSegmentsTable();
+  renderProcessSummary();
+  renderProcessMemoryMap();
   renderExplanation();
   renderPageMap(0);
   renderTranslation();
+
+  elements.processCatalog?.addEventListener("click", (event) => {
+    const card = event.target.closest("[data-pick-key]");
+    if (!card) return;
+    const program = state.programs.find((item) => String(item.key) === card.getAttribute("data-pick-key"));
+    if (!program) return;
+    applyProcessProgram(state.programs.findIndex((item) => item.key === program.key));
+  });
+
+  elements.processCatalog?.addEventListener("keydown", (event) => {
+    const card = event.target.closest(".process-card");
+    if (!card || (event.key !== "Enter" && event.key !== " ")) return;
+    event.preventDefault();
+    const program = state.programs.find((item) => String(item.key) === card.getAttribute("data-pick-key"));
+    if (!program) return;
+    applyProcessProgram(state.programs.findIndex((item) => item.key === program.key));
+  });
+
+  elements.processForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const formData = new FormData(event.target);
+    const program = {
+      name: String(formData.get("name") || "Nuevo proceso"),
+      txt: Number(formData.get("txt") || 1),
+      data: Number(formData.get("data") || 1),
+      bss: Number(formData.get("bss") || 1),
+      heap: Number(formData.get("heap") || 131072),
+      stack: Number(formData.get("stack") || 65536),
+    };
+
+    if (program.txt <= 0 || program.data < 0 || program.bss < 0 || program.heap <= 0 || program.stack <= 0) {
+      setMessage("Los tamaños del proceso deben ser válidos y mayores que cero en txt, heap y stack.", "error");
+      return;
+    }
+
+    const newIndex = addProcessProfile(program);
+    event.target.reset();
+    applyProcessProgram(newIndex);
+    setMessage(
+      `El proceso <strong>${program.name}</strong> se guardó en el catálogo local del navegador. Usa <strong>Descargar JSON</strong> si quieres generar el archivo actualizado.`,
+      "success",
+    );
+  });
+
+  elements.saveProgramsBtn?.addEventListener("click", () => {
+    const saved = saveProgramsToStorage(state.programs);
+    setMessage(
+      saved
+        ? "El catálogo de procesos quedó guardado en el navegador."
+        : "No se pudo guardar en el navegador por una limitación del entorno.",
+      saved ? "success" : "error",
+    );
+  });
+
+  elements.exportProgramsBtn?.addEventListener("click", () => {
+    downloadProgramsJson(state.programs);
+    setMessage("Se generó una descarga con el catálogo actual en formato JSON.", "success");
+  });
+
+  elements.restoreProgramsBtn?.addEventListener("click", async () => {
+    localStorage.removeItem(PROGRAM_STORAGE_KEY);
+    await loadPrograms();
+    applyProcessProgram(0);
+    setMessage("Se restauró el catálogo base desde programas.json.", "success");
+  });
 
   elements.pageSize.addEventListener("change", () => {
     state.pageSize = Number(elements.pageSize.value);
@@ -356,6 +645,7 @@ function bootstrap() {
     createSegmentOptions();
     renderSegmentsTable();
     renderPageMap(state.selectedSegmentIndex);
+    renderProcessMemoryMap();
     renderTranslation();
   });
 
@@ -364,4 +654,11 @@ function bootstrap() {
   elements.resetBtn.addEventListener("click", resetExample);
 }
 
-bootstrap();
+async function init() {
+  await loadPrograms();
+  renderProcessCatalog();
+  applyProcessProgram(0);
+  bootstrap();
+}
+
+init();
