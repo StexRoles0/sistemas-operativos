@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Segmentación paginada</title>
+    <title>Segmentación Paginada — Simulador</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600;700&display=swap" rel="stylesheet" />
@@ -11,208 +11,167 @@
   </head>
   <body>
     <main class="shell">
+
+      <!-- ── HERO ─────────────────────────────────────────────────────── -->
       <section class="hero">
-        <div>
-          <p class="eyebrow">Sistemas operativos</p>
-          <h1>Simulador de segmentación paginada para un espacio lógico de 32 bits</h1>
+        <div class="hero-text">
+          <p class="eyebrow">Sistemas Operativos</p>
+          <h1>Segmentación Paginada</h1>
           <p class="lead">
-            Este programa divide una dirección lógica en segmento, página y desplazamiento,
-            y muestra cómo una página se traduce a un marco físico dentro de una RAM direccionable de <strong>2<sup>32</sup></strong> posiciones.
+            Simulador de gestión de memoria física en una RAM de
+            <strong>2<sup>32</sup> bytes</strong>. Carga procesos y observa
+            cómo sus segmentos se paginan y se mapean a marcos físicos.
           </p>
         </div>
-
-        <div class="hero-grid">
-          <article class="stat-card">
-            <span>Espacio lógico</span>
-            <strong>2<sup>32</sup> bytes</strong>
-            <small>4 GiB direccionables</small>
-          </article>
-          <article class="stat-card">
-            <span>Segmentos</span>
-            <strong>8</strong>
-            <small>3 bits para el selector de segmento</small>
-          </article>
-          <article class="stat-card">
-            <span>Páginas</span>
-            <strong>Configurables</strong>
-            <small>El tamaño de página define el desplazamiento</small>
-          </article>
-          <article class="stat-card">
-            <span>Objetivo</span>
-            <strong>Traducir</strong>
-            <small>Segmento + página + offset → dirección física</small>
-          </article>
-        </div>
+        <div id="heroStats" class="hero-stats"></div>
       </section>
 
-      <section class="content">
-        <div class="panel controls">
-          <div class="panel-head">
-            <h2>Configuración</h2>
-            <p>Define el tamaño de página y los segmentos del proceso.</p>
-          </div>
+      <!-- ── WORKSPACE ─────────────────────────────────────────────────── -->
+      <section class="workspace">
 
-          <div class="field-grid">
+        <!-- LEFT SIDEBAR -->
+        <aside class="sidebar">
+
+          <!-- Config -->
+          <div class="panel">
+            <div class="panel-head">
+              <h2>Configuración</h2>
+            </div>
             <label class="field">
               <span>Tamaño de página</span>
               <select id="pageSize">
-                <option value="4096">4 KiB</option>
-                <option value="8192">8 KiB</option>
-                <option value="16384">16 KiB</option>
+                <option value="4096">4 KiB (2¹²)</option>
+                <option value="8192">8 KiB (2¹³)</option>
+                <option value="16384">16 KiB (2¹⁴)</option>
               </select>
             </label>
-
-            <label class="field">
-              <span>Segmento</span>
-              <select id="segmentSelect"></select>
-            </label>
-
-            <label class="field">
-              <span>Desplazamiento lógico dentro del segmento</span>
-              <input id="offsetInput" type="number" min="0" step="1" value="1024" />
-            </label>
-
-            <label class="field">
-              <span>Marco físico inicial de demo</span>
-              <input id="frameBaseInput" type="number" min="0" step="1" value="2048" />
-            </label>
+            <div id="bitBreakdown" class="bit-breakdown"></div>
           </div>
 
-          <div class="segments-editor">
-            <div class="segments-editor-head">
-              <h3>Segmentos del proceso</h3>
-              <p>Cada segmento se divide internamente en páginas del tamaño elegido.</p>
+          <!-- Catalog -->
+          <div class="panel">
+            <div class="panel-head">
+              <h2>Catálogo de procesos</h2>
+              <p>Selecciona un proceso para cargarlo en RAM.</p>
             </div>
-
-            <div id="segmentInputs" class="segment-list"></div>
+            <div id="catalog" class="catalog"></div>
+            <div class="sidebar-actions">
+              <button id="clearRamBtn" class="danger">Limpiar RAM</button>
+              <button id="exportBtn" class="secondary">Exportar JSON</button>
+            </div>
           </div>
 
-          <div class="process-switcher">
-            <div class="segments-editor-head">
-              <h3>Catálogo de procesos</h3>
-              <p>Selecciona un proceso base o agrega uno nuevo para cargar su distribución de memoria.</p>
+          <!-- Add process -->
+          <div class="panel">
+            <div class="panel-head">
+              <h2>Nuevo proceso</h2>
+              <p>Define el tamaño de cada segmento en bytes.</p>
             </div>
-
-            <div id="processCatalog" class="process-catalog"></div>
-
-            <form id="processForm" class="process-form">
-              <div class="process-form-head">
-                <h4>Agregar proceso</h4>
-                <p>Crea un nuevo perfil de proceso para probar otro escenario de memoria.</p>
-              </div>
-
-              <div class="process-form-grid">
-                <label class="field">
-                  <span>Nombre</span>
-                  <input type="text" name="name" value="Nuevo proceso" required />
-                </label>
-                <label class="field">
-                  <span>.txt</span>
-                  <input type="number" name="txt" min="1" step="1" value="262144" required />
-                </label>
-                <label class="field">
-                  <span>.data</span>
-                  <input type="number" name="data" min="0" step="1" value="131072" required />
-                </label>
-                <label class="field">
-                  <span>.bss</span>
-                  <input type="number" name="bss" min="0" step="1" value="65536" required />
-                </label>
-                <label class="field">
-                  <span>Heap</span>
-                  <input type="number" name="heap" min="1" step="1" value="131072" required />
-                </label>
-                <label class="field">
-                  <span>Stack</span>
-                  <input type="number" name="stack" min="1" step="1" value="65536" required />
-                </label>
-              </div>
-
-              <button type="submit" class="secondary process-form-btn">Agregar proceso</button>
+            <form id="addForm" class="add-form">
+              <label class="field">
+                <span>Nombre</span>
+                <input type="text" name="name" value="Mi Proceso" required />
+              </label>
+              <label class="field">
+                <span>Código (.txt)</span>
+                <input type="number" name="txt" min="1" value="262144" required />
+              </label>
+              <label class="field">
+                <span>Datos (.data)</span>
+                <input type="number" name="data" min="0" value="65536" required />
+              </label>
+              <label class="field">
+                <span>BSS (.bss)</span>
+                <input type="number" name="bss" min="0" value="32768" required />
+              </label>
+              <label class="field">
+                <span>Heap</span>
+                <input type="number" name="heap" min="1" value="131072" required />
+              </label>
+              <label class="field">
+                <span>Stack</span>
+                <input type="number" name="stack" min="1" value="65536" required />
+              </label>
+              <button type="submit" class="primary full-w">Agregar al catálogo</button>
             </form>
+          </div>
 
-            <div class="process-actions">
-              <button type="button" id="saveProgramsBtn" class="secondary">Guardar catálogo</button>
-              <button type="button" id="exportProgramsBtn" class="secondary">Descargar JSON</button>
-              <button type="button" id="restoreProgramsBtn" class="secondary">Restaurar base</button>
+        </aside>
+
+        <!-- MAIN AREA -->
+        <div class="main-area">
+
+          <!-- RAM visualization -->
+          <div class="panel ram-panel">
+            <div class="panel-head">
+              <h2>Mapa de RAM física</h2>
+              <p>Cada celda es un marco de página. El color indica el proceso dueño del marco.</p>
             </div>
 
-            <div id="processMemoryMap" class="process-memory-map"></div>
+            <div class="ram-overview">
+              <div id="ramOverviewBar" class="ram-ov-bar"></div>
+              <div id="ramOverviewLabel" class="ram-ov-label">RAM vacía</div>
+            </div>
 
-            <p id="processSummary" class="process-summary"></p>
+            <div id="ramEmpty" class="ram-empty">
+              <p>No hay procesos cargados. Selecciona un proceso del catálogo.</p>
+            </div>
+
+            <div id="frameMap" class="frame-map"></div>
+
+            <div id="ramLegend" class="ram-legend"></div>
           </div>
 
-          <div class="actions">
-            <button id="translateBtn" class="primary">Traducir dirección</button>
-            <button id="randomBtn" class="secondary">Ejemplo aleatorio</button>
-            <button id="resetBtn" class="secondary">Restablecer ejemplo</button>
-          </div>
-        </div>
-
-        <div class="panel results">
-          <div class="panel-head">
-            <h2>Resultado de la traducción</h2>
-            <p>La salida muestra el recorrido completo desde la dirección lógica hasta la física.</p>
+          <!-- Loaded programs -->
+          <div class="panel loaded-panel" id="loadedPanel">
+            <div class="panel-head">
+              <h2>Procesos en RAM</h2>
+              <p>Tabla de segmentos y páginas de cada proceso cargado.</p>
+            </div>
+            <div id="loadedPrograms"></div>
           </div>
 
-          <div class="result-grid">
-            <article class="result-card highlight">
-              <span>Dirección lógica</span>
-              <strong id="logicalAddress">-</strong>
-              <small id="logicalBits">-</small>
-            </article>
-            <article class="result-card">
-              <span>Segmento</span>
-              <strong id="segmentResult">-</strong>
-              <small id="segmentRange">-</small>
-            </article>
-            <article class="result-card">
-              <span>Página y offset</span>
-              <strong id="pageResult">-</strong>
-              <small id="offsetResult">-</small>
-            </article>
-            <article class="result-card">
-              <span>Dirección física</span>
-              <strong id="physicalAddress">-</strong>
-              <small id="frameResult">-</small>
-            </article>
-          </div>
-
-          <div id="messageBox" class="message-box"></div>
-
-          <div class="table-wrap">
-            <h3>Tabla de segmentos y páginas</h3>
-            <table>
-              <thead>
-                <tr>
-                  <th>Segmento</th>
-                  <th>Tamaño</th>
-                  <th>Páginas</th>
-                  <th>Base lógica</th>
-                  <th>Límite</th>
-                  <th>Marco base</th>
-                </tr>
-              </thead>
-              <tbody id="segmentTableBody"></tbody>
-            </table>
-          </div>
-
-          <div class="page-map">
-            <h3>Mapa de páginas del segmento seleccionado</h3>
-            <div id="pageMap" class="page-grid"></div>
-          </div>
         </div>
       </section>
 
+      <!-- ── TRANSLATION ───────────────────────────────────────────────── -->
+      <section class="panel translation-panel">
+        <div class="panel-head">
+          <h2>Traducción de dirección lógica → física</h2>
+          <p>Selecciona un proceso cargado, un segmento y un desplazamiento para ver la traducción completa.</p>
+        </div>
+
+        <div class="trans-controls">
+          <label class="field">
+            <span>Proceso</span>
+            <select id="transProgram"></select>
+          </label>
+          <label class="field">
+            <span>Segmento</span>
+            <select id="transSegment"></select>
+          </label>
+          <label class="field">
+            <span>Desplazamiento lógico (bytes)</span>
+            <input id="transOffset" type="number" min="0" value="1024" />
+          </label>
+          <button id="transBtn" class="primary">Traducir</button>
+        </div>
+
+        <div id="transResult" class="trans-result"></div>
+      </section>
+
+      <!-- ── EXPLANATION ───────────────────────────────────────────────── -->
       <section class="panel explanation">
         <div class="panel-head">
           <h2>Cómo se divide el espacio de direcciones lógicas</h2>
         </div>
-
         <div id="explanationText" class="explanation-text"></div>
       </section>
+
     </main>
+
+    <div id="toast" class="toast" hidden></div>
 
     <script defer src="./app.js"></script>
   </body>
-  </html>
+</html>

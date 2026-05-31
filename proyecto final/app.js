@@ -1,664 +1,703 @@
-const LOGICAL_BITS = 32;
-const TOTAL_LOGICAL_BYTES = 2 ** LOGICAL_BITS;
-const DEFAULT_SEGMENTS = [
-  { name: "Código", size: 524288, baseFrame: 2048, maxOffset: 524287 },
-  { name: "Datos", size: 262144, baseFrame: 2560, maxOffset: 262143 },
-  { name: "BSS", size: 131072, baseFrame: 3072, maxOffset: 131071 },
-  { name: "Heap", size: 1048576, baseFrame: 3584, maxOffset: 1048575 },
-  { name: "Stack", size: 524288, baseFrame: 4608, maxOffset: 524287 },
+// ── Constants ──────────────────────────────────────────────────────────────
+const LOGICAL_BITS  = 32;
+const TOTAL_RAM     = 2 ** 32;   // 4 GiB
+const STORAGE_KEY   = "segpag-v3-catalog";
+const COLORS = [
+  "#7dd3fc", "#fbbf24", "#34d399", "#f87171",
+  "#a78bfa", "#fb923c", "#e879f9", "#4ade80",
+  "#facc15", "#38bdf8", "#818cf8", "#f472b6",
+];
+const DEFAULT_CATALOG = [
+  { key: 1, name: "NotePad",     txt: 195240,  data: 12352,  bss: 1165,  heap: 131072,  stack: 65536  },
+  { key: 2, name: "Word",        txt: 775390,  data: 32680,  bss: 4100,  heap: 262144,  stack: 65536  },
+  { key: 3, name: "Excel",       txt: 995420,  data: 24245,  bss: 7557,  heap: 524288,  stack: 65536  },
+  { key: 4, name: "AutoCad",     txt: 1150000, data: 123470, bss: 1123,  heap: 1048576, stack: 131072 },
+  { key: 5, name: "Calculadora", txt: 123420,  data: 1246,   bss: 1756,  heap: 131072,  stack: 32768  },
 ];
 
-const DEFAULT_PROCESSES = [
-  { key: 1, id: 0, name: "NotePad", txt: 195240, data: 12352, bss: 1165, heap: 131072, stack: 65536 },
-  { key: 2, id: 0, name: "Word", txt: 775390, data: 32680, bss: 4100, heap: 262144, stack: 65536 },
-  { key: 3, id: 0, name: "Excel", txt: 995420, data: 24245, bss: 7557, heap: 524288, stack: 65536 },
-  { key: 4, id: 0, name: "AutoCad", txt: 1150000, data: 123470, bss: 1123, heap: 1048576, stack: 131072 },
-  { key: 5, id: 0, name: "Calculadora", txt: 123420, data: 1246, bss: 1756, heap: 131072, stack: 32768 },
-];
+// ── Constants ──────────────────────────────────────────────────────────────
+const MAX_VISUAL_CELLS = 256;   // max colored cells per segment row
+const MAX_PT_ENTRIES   = 200;   // max entries shown in the page table popup
 
-const PROGRAM_STORAGE_KEY = "sistemas-operativos-proyecto-final-programas";
-
+// ── State ──────────────────────────────────────────────────────────────────
 const state = {
-  pageSize: 4096,
-  programs: structuredClone(DEFAULT_PROCESSES),
-  selectedProgramIndex: 0,
-  segments: structuredClone(DEFAULT_SEGMENTS),
-  selectedSegmentIndex: 0,
+  pageSize:   4096,
+  catalog:    [],
+  loaded:     [],     // { loadId, name, color, segments:[{index,name,size,baseFrame,pageCount}], totalPages }
+  // No frameMap — ownership is derived from state.loaded directly.
+  // This avoids allocating millions of objects for large programs.
+  nextFrame:  0,
+  nextLoadId: 1,
+  colorIndex: 0,
 };
 
-const elements = {
-  pageSize: document.getElementById("pageSize"),
-  segmentSelect: document.getElementById("segmentSelect"),
-  offsetInput: document.getElementById("offsetInput"),
-  frameBaseInput: document.getElementById("frameBaseInput"),
-  segmentInputs: document.getElementById("segmentInputs"),
-  processCatalog: document.getElementById("processCatalog"),
-  processForm: document.getElementById("processForm"),
-  processMemoryMap: document.getElementById("processMemoryMap"),
-  processSummary: document.getElementById("processSummary"),
-  saveProgramsBtn: document.getElementById("saveProgramsBtn"),
-  exportProgramsBtn: document.getElementById("exportProgramsBtn"),
-  restoreProgramsBtn: document.getElementById("restoreProgramsBtn"),
-  translateBtn: document.getElementById("translateBtn"),
-  randomBtn: document.getElementById("randomBtn"),
-  resetBtn: document.getElementById("resetBtn"),
-  logicalAddress: document.getElementById("logicalAddress"),
-  logicalBits: document.getElementById("logicalBits"),
-  segmentResult: document.getElementById("segmentResult"),
-  segmentRange: document.getElementById("segmentRange"),
-  pageResult: document.getElementById("pageResult"),
-  offsetResult: document.getElementById("offsetResult"),
-  physicalAddress: document.getElementById("physicalAddress"),
-  frameResult: document.getElementById("frameResult"),
-  messageBox: document.getElementById("messageBox"),
-  segmentTableBody: document.getElementById("segmentTableBody"),
-  pageMap: document.getElementById("pageMap"),
-  explanationText: document.getElementById("explanationText"),
-};
-
-function formatBytes(value) {
-  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(2)} MiB`;
-  if (value >= 1024) return `${(value / 1024).toFixed(2)} KiB`;
-  return `${value} B`;
+// ── Utilities ──────────────────────────────────────────────────────────────
+function fmt(v) {
+  v = Number(v);
+  if (v >= 1_048_576) return `${(v / 1_048_576).toFixed(2)} MiB`;
+  if (v >= 1_024)     return `${(v / 1_024).toFixed(2)} KiB`;
+  return `${v} B`;
 }
 
-function formatBinary(value, bits = LOGICAL_BITS) {
-  return `0b${value.toString(2).padStart(bits, "0")}`;
+function hex(v, w = 8) {
+  return `0x${v.toString(16).toUpperCase().padStart(w, "0")}`;
 }
 
-function formatHex(value, width = 8) {
-  return `0x${value.toString(16).toUpperCase().padStart(width, "0")}`;
+function bin(v, bits) {
+  return v.toString(2).padStart(bits, "0");
 }
 
-function pageOffsetBits(pageSize) {
-  return Math.round(Math.log2(pageSize));
+function totalFrames()  { return Math.floor(TOTAL_RAM / state.pageSize); }
+function offBits()      { return Math.round(Math.log2(state.pageSize)); }
+function segBitsCount() { return 3; }
+function pgBits()       { return LOGICAL_BITS - segBitsCount() - offBits(); }
+function progSize(p)    { return (+p.txt) + (+p.data) + (+p.bss) + (+p.heap) + (+p.stack); }
+function pageCnt(size)  { return Math.ceil(size / state.pageSize); }
+
+// ── Storage ────────────────────────────────────────────────────────────────
+function saveCatalog() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state.catalog)); } catch (_) {}
 }
 
-function segmentBits() {
-  return 3;
-}
-
-function pageBits(pageSize) {
-  return LOGICAL_BITS - segmentBits() - pageOffsetBits(pageSize);
-}
-
-function createSegmentInputs() {
-  elements.segmentInputs.innerHTML = "";
-
-  state.segments.forEach((segment, index) => {
-    const row = document.createElement("article");
-    row.className = "segment-row";
-    row.innerHTML = `
-      <div>
-        <header>
-          <h4>${segment.name}</h4>
-          <span class="hint">S${index}</span>
-        </header>
-        <label class="field">
-          <span>Tamaño del segmento</span>
-          <input type="number" min="1" step="1" value="${segment.size}" data-segment-size="${index}" />
-        </label>
-      </div>
-      <div>
-        <label class="field">
-          <span>Marco físico base</span>
-          <input type="number" min="0" step="1" value="${segment.baseFrame}" data-segment-frame="${index}" />
-        </label>
-      </div>
-    `;
-    elements.segmentInputs.appendChild(row);
-  });
-}
-
-function processMemorySize(program) {
-  return Number(program.txt) + Number(program.data) + Number(program.bss) + Number(program.heap) + Number(program.stack);
-}
-
-function normalizeProgram(program, index = 0) {
-  return {
-    key: Number(program.key) || index + 1,
-    id: 0,
-    name: String(program.name || `Proceso ${index + 1}`),
-    txt: Math.max(1, Number(program.txt || 1)),
-    data: Math.max(0, Number(program.data || 0)),
-    bss: Math.max(0, Number(program.bss || 0)),
-    heap: Math.max(1, Number(program.heap || 131072)),
-    stack: Math.max(1, Number(program.stack || 65536)),
-  };
-}
-
-function nextProgramKey() {
-  return state.programs.reduce((maxKey, program) => Math.max(maxKey, Number(program.key) || 0), 0) + 1;
-}
-
-function readStoredPrograms() {
+function initCatalog() {
   try {
-    const raw = localStorage.getItem(PROGRAM_STORAGE_KEY);
-    if (!raw) return null;
-
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed) || parsed.length === 0) return null;
-
-    return parsed.map((program, index) => normalizeProgram(program, index));
-  } catch (_) {
-    return null;
-  }
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const p = JSON.parse(raw);
+      if (Array.isArray(p) && p.length) { state.catalog = p; return; }
+    }
+  } catch (_) {}
+  state.catalog = structuredClone(DEFAULT_CATALOG);
 }
 
-function saveProgramsToStorage(programs) {
+async function tryLoadFromJson() {
   try {
-    localStorage.setItem(PROGRAM_STORAGE_KEY, JSON.stringify(programs));
-    return true;
-  } catch (_) {
-    return false;
-  }
+    const r = await fetch("./programas.json");
+    if (!r.ok) return;
+    const data = await r.json();
+    if (!Array.isArray(data) || !data.length) return;
+    state.catalog = data.map((p, i) => ({
+      key:   Number(p.key)  || i + 1,
+      name:  String(p.name) || `Proceso ${i + 1}`,
+      txt:   Math.max(1, Number(p.txt)   || 1),
+      data:  Math.max(0, Number(p.data)  || 0),
+      bss:   Math.max(0, Number(p.bss)   || 0),
+      heap:  Math.max(1, Number(p.heap)  || 131072),
+      stack: Math.max(1, Number(p.stack) || 65536),
+    }));
+    saveCatalog();
+  } catch (_) {}
 }
 
-function downloadProgramsJson(programs) {
-  const blob = new Blob([JSON.stringify(programs, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "programas.json";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
+// ── Frame Allocator ────────────────────────────────────────────────────────
+// Ownership is stored inside each seg object (baseFrame + pageCount),
+// so no per-frame array is needed — no memory blowup for large programs.
+
+function allocFrames(count) {
+  const base = state.nextFrame;
+  state.nextFrame += count;
+  return base;
 }
 
-function buildSegmentsFromProgram(program) {
-  return [
-    { name: "Código", size: Math.max(1, Number(program.txt || 1)), baseFrame: 2048, maxOffset: Math.max(1, Number(program.txt || 1)) - 1 },
-    { name: "Datos", size: Math.max(1, Number(program.data || 1)), baseFrame: 2560, maxOffset: Math.max(1, Number(program.data || 1)) - 1 },
-    { name: "BSS", size: Math.max(1, Number(program.bss || 1)), baseFrame: 3072, maxOffset: Math.max(1, Number(program.bss || 1)) - 1 },
-    { name: "Heap", size: Math.max(1, Number(program.heap || 1)), baseFrame: 3584, maxOffset: Math.max(1, Number(program.heap || 1)) - 1 },
-    { name: "Stack", size: Math.max(1, Number(program.stack || 1)), baseFrame: 4608, maxOffset: Math.max(1, Number(program.stack || 1)) - 1 },
+function loadProgram(entry) {
+  const tf = totalFrames();
+  const segs = [
+    { name: "Código", size: Math.max(1, +entry.txt)        },
+    { name: "Datos",  size: Math.max(1, +entry.data || 1)  },
+    { name: "BSS",    size: Math.max(1, +entry.bss  || 1)  },
+    { name: "Heap",   size: Math.max(1, +entry.heap)       },
+    { name: "Stack",  size: Math.max(1, +entry.stack)      },
   ];
+  const needed = segs.reduce((s, g) => s + pageCnt(g.size), 0);
+  if (state.nextFrame + needed > tf) return null;
+
+  const color  = COLORS[state.colorIndex % COLORS.length];
+  state.colorIndex++;
+  const loadId = state.nextLoadId++;
+
+  const loadedSegs = segs.map((seg, i) => {
+    const pc        = pageCnt(seg.size);
+    const baseFrame = allocFrames(pc);
+    return { index: i, name: seg.name, size: seg.size, baseFrame, pageCount: pc };
+  });
+
+  const prog = { loadId, name: entry.name, color, segments: loadedSegs, totalPages: needed };
+  state.loaded.push(prog);
+  return prog;
 }
 
-function renderProcessSummary() {
-  const program = state.programs[state.selectedProgramIndex];
-  const totalBytes = state.segments.reduce((sum, segment) => sum + segment.size, 0);
+function unloadProgram(loadId) {
+  state.loaded = state.loaded.filter(p => p.loadId !== loadId);
+  // Recalculate nextFrame as the highest frame still in use.
+  // This reclaims any trailing free space left by the removed program.
+  state.nextFrame = state.loaded.reduce((max, prog) =>
+    prog.segments.reduce((m, s) => Math.max(m, s.baseFrame + s.pageCount), max)
+  , 0);
+}
 
-  elements.processSummary.innerHTML = `
-    <strong>Proceso activo: ${program.name}</strong><br />
-    Segmentos: ${state.segments.length} · Huella lógica aproximada: ${formatBytes(totalBytes)}<br />
-    Tamaño total del proceso: ${formatBytes(processMemorySize(program))}
+function clearRAM() {
+  state.nextFrame  = 0;
+  state.loaded     = [];
+  state.colorIndex = 0;
+}
+
+// ── Render: Hero Stats ─────────────────────────────────────────────────────
+function renderHeroStats() {
+  const el = document.getElementById("heroStats");
+  if (!el) return;
+  const tf  = totalFrames();
+  const uf  = state.loaded.reduce((s, p) => s + p.totalPages, 0);
+  const ub  = uf * state.pageSize;
+  const pct = ((uf / tf) * 100).toFixed(4);
+
+  el.innerHTML = `
+    <div class="stat-card">
+      <span>Espacio lógico</span>
+      <strong>2<sup>32</sup> bytes</strong>
+      <small>4 GiB por proceso</small>
+    </div>
+    <div class="stat-card">
+      <span>Marcos totales</span>
+      <strong>${tf.toLocaleString("es")}</strong>
+      <small>de ${fmt(state.pageSize)} c/u</small>
+    </div>
+    <div class="stat-card ${uf > 0 ? "stat-card--on" : ""}">
+      <span>RAM usada</span>
+      <strong>${fmt(ub)}</strong>
+      <small>${pct}% · ${uf.toLocaleString("es")} marcos</small>
+    </div>
+    <div class="stat-card ${state.loaded.length > 0 ? "stat-card--on" : ""}">
+      <span>Procesos en RAM</span>
+      <strong>${state.loaded.length}</strong>
+      <small>${state.loaded.length === 1 ? "proceso activo" : "procesos activos"}</small>
+    </div>
   `;
 }
 
-function renderProcessMemoryMap() {
-  if (!elements.processMemoryMap) return;
-
-  const program = state.programs[state.selectedProgramIndex];
-  const cards = state.segments.map((segment, index) => {
-    const pages = getSegmentPageCount(segment);
-    const logicalBase = getSegmentLogicalBase(index);
-    const logicalLimit = logicalBase + segment.size - 1;
-    const usedBytes = pages * state.pageSize;
-    const occupancy = Math.min(100, (segment.size / usedBytes) * 100);
-    const pagePreviewLimit = 6;
-    const pagePreview = Array.from({ length: Math.min(pages, pagePreviewLimit) }, (_, page) => {
-      const frame = segment.baseFrame + page;
-      return `<span class="memory-pill">P${page} → M${frame}</span>`;
-    }).join("");
-    const remainingPages = pages - pagePreviewLimit;
-
-    return `
-      <article class="memory-segment-card">
-        <div class="memory-segment-head">
-          <div>
-            <strong>${segment.name}</strong>
-            <span>${formatBytes(segment.size)} · ${pages} páginas</span>
-          </div>
-          <small>${formatHex(logicalBase)} - ${formatHex(logicalLimit)}</small>
-        </div>
-        <div class="memory-fill" aria-hidden="true">
-          <span style="width:${occupancy.toFixed(2)}%"></span>
-        </div>
-        <div class="memory-segment-meta">
-          <span>Marco base ${segment.baseFrame}</span>
-          <span>Marco final ${segment.baseFrame + pages - 1}</span>
-        </div>
-        <div class="memory-pills">
-          ${pagePreview}
-          ${remainingPages > 0 ? `<span class="memory-pill memory-pill--more">+${remainingPages} páginas</span>` : ""}
-        </div>
-      </article>
-    `;
-  }).join("");
-
-  elements.processMemoryMap.innerHTML = cards || `<div class="empty">No hay segmentos para mostrar en ${program.name}.</div>`;
+// ── Render: Bit Breakdown ──────────────────────────────────────────────────
+function renderBitBreakdown() {
+  const el = document.getElementById("bitBreakdown");
+  if (!el) return;
+  const sb = segBitsCount(), pb = pgBits(), ob = offBits();
+  el.innerHTML = `
+    <div class="bb-row">
+      <span class="bb-chip bb--seg">${sb} bits · segmento</span>
+      <span class="bb-chip bb--page">${pb} bits · página</span>
+      <span class="bb-chip bb--off">${ob} bits · offset</span>
+    </div>
+    <code class="bb-code">[${sb}][${pb}][${ob}] = ${LOGICAL_BITS} bits</code>
+  `;
 }
 
-function renderProcessCatalog() {
-  if (!elements.processCatalog) return;
-
-  const cards = state.programs.map((program, index) => {
-    const isActive = index === state.selectedProgramIndex ? "process-card--active" : "";
-    return `
-      <article class="process-card ${isActive}" data-pick-key="${program.key}" tabindex="0" role="button" aria-label="Cargar ${program.name}">
-        <div class="process-card-head">
-          <button class="process-card-button" data-pick-key="${program.key}">${program.name}</button>
-          <span class="process-card-size">${formatBytes(processMemorySize(program))}</span>
-        </div>
-        <div class="process-card-meta">
-          <span><strong>.txt</strong> ${formatBytes(program.txt)}</span>
-          <span><strong>.data</strong> ${formatBytes(program.data)}</span>
-          <span><strong>.bss</strong> ${formatBytes(program.bss)}</span>
-          <span><strong>heap</strong> ${formatBytes(program.heap)}</span>
-          <span><strong>stack</strong> ${formatBytes(program.stack)}</span>
-        </div>
-      </article>`;
-  }).join("");
-
-  elements.processCatalog.innerHTML = cards;
+// ── Render: Catalog ────────────────────────────────────────────────────────
+function renderCatalog() {
+  const el = document.getElementById("catalog");
+  if (!el) return;
+  if (!state.catalog.length) {
+    el.innerHTML = '<p class="empty">Catálogo vacío.</p>';
+    return;
+  }
+  el.innerHTML = state.catalog.map(p => `
+    <div class="cat-card">
+      <div class="cat-head">
+        <strong>${p.name}</strong>
+        <span class="cat-size">${fmt(progSize(p))}</span>
+      </div>
+      <div class="cat-segs">
+        <span>.txt ${fmt(p.txt)}</span>
+        <span>.data ${fmt(p.data)}</span>
+        <span>.bss ${fmt(p.bss)}</span>
+        <span>heap ${fmt(p.heap)}</span>
+        <span>stack ${fmt(p.stack)}</span>
+      </div>
+      <div class="cat-row-btns">
+        <button class="primary small" data-load-key="${p.key}">Cargar en RAM</button>
+        <button class="ghost small" data-del-key="${p.key}">Eliminar</button>
+      </div>
+    </div>
+  `).join("");
 }
 
-function createSegmentOptions() {
-  elements.segmentSelect.innerHTML = "";
-  state.segments.forEach((segment, index) => {
-    const option = document.createElement("option");
-    option.value = String(index);
-    option.textContent = `${segment.name} (${formatBytes(segment.size)})`;
-    elements.segmentSelect.appendChild(option);
-  });
-  elements.segmentSelect.value = String(state.selectedSegmentIndex);
-}
+// ── Render: RAM Overview Bar ───────────────────────────────────────────────
+function renderRAMOverview() {
+  const bar   = document.getElementById("ramOverviewBar");
+  const label = document.getElementById("ramOverviewLabel");
+  if (!bar) return;
 
-function syncInputsFromState() {
-  elements.pageSize.value = String(state.pageSize);
-  elements.offsetInput.value = String(Math.min(Number(elements.offsetInput.value || 0), getSelectedSegment().size - 1));
-  elements.frameBaseInput.value = String(getSelectedSegment().baseFrame);
-}
+  const tf = totalFrames();
+  const uf = state.loaded.reduce((s, p) => s + p.totalPages, 0);
 
-function getSelectedSegment() {
-  return state.segments[state.selectedSegmentIndex];
-}
-
-function updateSegmentFromInputs() {
-  document.querySelectorAll("[data-segment-size]").forEach((input) => {
-    const index = Number(input.dataset.segmentSize);
-    state.segments[index].size = Math.max(1, Number(input.value || 1));
-  });
-
-  document.querySelectorAll("[data-segment-frame]").forEach((input) => {
-    const index = Number(input.dataset.segmentFrame);
-    state.segments[index].baseFrame = Math.max(0, Number(input.value || 0));
-  });
-}
-
-function applyProcessProgram(programIndex) {
-  const program = state.programs[programIndex];
-
-  state.selectedProgramIndex = programIndex;
-  state.segments = buildSegmentsFromProgram(program);
-  state.selectedSegmentIndex = 0;
-
-  createSegmentInputs();
-  createSegmentOptions();
-  syncInputsFromState();
-  elements.offsetInput.value = String(Math.min(Number(elements.offsetInput.value || 1024), state.segments[0].size - 1));
-  renderProcessCatalog();
-  renderSegmentsTable();
-  renderPageMap(0);
-  renderProcessSummary();
-  renderProcessMemoryMap();
-  renderExplanation();
-  renderTranslation();
-}
-
-function addProcessProfile(program) {
-  const newProgram = { ...normalizeProgram(program, state.programs.length), key: nextProgramKey(), id: 0 };
-  state.programs = [...state.programs, newProgram];
-  saveProgramsToStorage(state.programs);
-  return state.programs.length - 1;
-}
-
-async function loadPrograms() {
-  const storedPrograms = readStoredPrograms();
-  if (storedPrograms) {
-    state.programs = storedPrograms;
+  if (!uf) {
+    bar.innerHTML   = "";
+    if (label) label.textContent = "RAM vacía — 0 marcos usados de " + tf.toLocaleString("es");
     return;
   }
 
-  const sources = ["./programas.json", "programas.json"];
-
-  for (const source of sources) {
-    try {
-      const response = await fetch(source);
-      if (!response.ok) continue;
-
-      const programs = await response.json();
-      if (Array.isArray(programs) && programs.length > 0) {
-        state.programs = programs.map((program, index) => normalizeProgram(program, index));
-        saveProgramsToStorage(state.programs);
-        return;
-      }
-    } catch (_) {
-      continue;
+  // Bar: proportional to the used region (not full 4GB, which would be invisible)
+  const segs = [];
+  for (const prog of state.loaded) {
+    for (const seg of prog.segments) {
+      const w = ((seg.pageCount / uf) * 100).toFixed(4);
+      segs.push(`<div class="ram-ov-seg" style="width:${w}%;background:${prog.color}" title="${prog.name} · ${seg.name}: ${seg.pageCount} marcos"></div>`);
     }
   }
+  bar.innerHTML = segs.join("");
 
-  state.programs = structuredClone(DEFAULT_PROCESSES);
-  saveProgramsToStorage(state.programs);
+  if (label) {
+    const ub  = uf * state.pageSize;
+    const pct = ((uf / tf) * 100).toFixed(6);
+    label.innerHTML = `<strong>${fmt(ub)}</strong> usados de 4 GiB &nbsp;·&nbsp; ${pct}% &nbsp;·&nbsp; ${uf.toLocaleString("es")} / ${tf.toLocaleString("es")} marcos`;
+  }
 }
 
-function getSegmentPageCount(segment) {
-  return Math.ceil(segment.size / state.pageSize);
-}
+// ── Render: Frame Map ──────────────────────────────────────────────────────
+function renderFrameMap() {
+  const el      = document.getElementById("frameMap");
+  const emptyEl = document.getElementById("ramEmpty");
+  if (!el) return;
 
-function getSegmentLogicalBase(segmentIndex) {
-  return state.segments.slice(0, segmentIndex).reduce((sum, segment) => sum + segment.size, 0);
-}
+  if (!state.loaded.length) {
+    el.innerHTML = "";
+    if (emptyEl) emptyEl.hidden = false;
+    return;
+  }
+  if (emptyEl) emptyEl.hidden = true;
 
-function createTranslation(segmentIndex, logicalOffset) {
-  const segment = state.segments[segmentIndex];
-  const pagesInSegment = getSegmentPageCount(segment);
-  const pageIndex = Math.floor(logicalOffset / state.pageSize);
-  const pageOffset = logicalOffset % state.pageSize;
-  const frameNumber = segment.baseFrame + pageIndex;
-  const physicalAddress = frameNumber * state.pageSize + pageOffset;
-  const offsetBits = pageOffsetBits(state.pageSize);
-  const logicalAddress = (segmentIndex * (2 ** (pageBits(state.pageSize) + offsetBits))) +
-    (pageIndex * (2 ** offsetBits)) +
-    pageOffset;
+  const rows = [];
+  for (const prog of state.loaded) {
+    for (const seg of prog.segments) {
+      const { pageCount } = seg;
 
-  return {
-    segment,
-    pagesInSegment,
-    pageIndex,
-    pageOffset,
-    frameNumber,
-    physicalAddress,
-    logicalAddress,
-  };
-}
+      // Cap visual cells — group multiple pages per cell when segment is large
+      const cellCount    = Math.min(pageCount, MAX_VISUAL_CELLS);
+      const pagesPerCell = Math.ceil(pageCount / cellCount);
 
-function renderSegmentsTable() {
-  elements.segmentTableBody.innerHTML = "";
-  let logicalCursor = 0;
+      const cells = Array.from({ length: cellCount }, (_, i) => {
+        const p0   = i * pagesPerCell;
+        const p1   = Math.min(p0 + pagesPerCell - 1, pageCount - 1);
+        const f0   = seg.baseFrame + p0;
+        const f1   = seg.baseFrame + p1;
+        const tip  = pagesPerCell === 1
+          ? `P${p0} → M${f0}\n${hex(f0 * state.pageSize)}`
+          : `P${p0}–P${p1} → M${f0}–M${f1}\n${hex(f0 * state.pageSize)} – ${hex(f1 * state.pageSize)}`;
+        return `<div class="fc" style="background:${prog.color}" title="${tip}"></div>`;
+      }).join("");
 
-  state.segments.forEach((segment, index) => {
-    const pages = getSegmentPageCount(segment);
-    const row = document.createElement("tr");
-    const logicalBase = getSegmentLogicalBase(index);
-    row.innerHTML = `
-      <td>${segment.name}</td>
-      <td>${formatBytes(segment.size)}</td>
-      <td>${pages}</td>
-      <td>${formatHex(logicalBase)}</td>
-      <td>${formatHex(logicalBase + segment.size - 1)}</td>
-      <td>${segment.baseFrame}</td>
-    `;
-    elements.segmentTableBody.appendChild(row);
+      const scaleNote = pagesPerCell > 1
+        ? `<span class="fm-scale">1 celda = ${pagesPerCell} páginas</span>`
+        : "";
 
-    const option = elements.segmentSelect.querySelector(`option[value="${index}"]`);
-    if (option) option.textContent = `${segment.name} (${formatBytes(segment.size)})`;
-  });
-}
-
-function renderPageMap(segmentIndex) {
-  const segment = state.segments[segmentIndex];
-  const pageCount = getSegmentPageCount(segment);
-  const activePage = Math.min(Math.floor(Number(elements.offsetInput.value || 0) / state.pageSize), Math.max(pageCount - 1, 0));
-  const cards = [];
-
-  for (let page = 0; page < pageCount; page += 1) {
-    const frameNumber = segment.baseFrame + page;
-    const logicalStart = page * state.pageSize;
-    const logicalEnd = Math.min(logicalStart + state.pageSize - 1, segment.size - 1);
-    const occupancy = page === pageCount - 1
-      ? ((segment.size - logicalStart) / state.pageSize) * 100
-      : 100;
-    cards.push(`
-      <article class="page-card ${page === activePage ? "page-card--active" : ""}">
-        <div class="page-card-top">
-          <span>Página ${page}</span>
-          <strong>Marco ${frameNumber}</strong>
+      rows.push(`
+        <div class="fm-row">
+          <div class="fm-label">
+            <span class="fm-dot" style="background:${prog.color}"></span>
+            <span class="fm-prog">${prog.name}</span>
+            <span class="fm-seg">${seg.name}</span>
+            <span class="fm-info">${seg.pageCount} pág · ${fmt(seg.size)}</span>
+            ${scaleNote}
+          </div>
+          <div class="fm-cells">${cells}</div>
         </div>
-        <div class="page-card-bar" aria-hidden="true">
-          <span style="width:${occupancy.toFixed(2)}%"></span>
-        </div>
-        <small>
-          Rango lógico: ${formatHex(logicalStart)} - ${formatHex(logicalEnd)}<br />
-          Base física: ${formatHex(frameNumber * state.pageSize)}
-        </small>
-      </article>
-    `);
+      `);
+    }
+  }
+  el.innerHTML = rows.join("");
+}
+
+// ── Render: RAM Legend ─────────────────────────────────────────────────────
+function renderRAMLegend() {
+  const el = document.getElementById("ramLegend");
+  if (!el) return;
+  if (!state.loaded.length) { el.innerHTML = ""; return; }
+  el.innerHTML = state.loaded.map(p => `
+    <div class="legend-item">
+      <span class="legend-dot" style="background:${p.color}"></span>
+      <span>${p.name}</span>
+      <span class="legend-info">${p.totalPages} marcos · ${fmt(p.totalPages * state.pageSize)}</span>
+    </div>
+  `).join("");
+}
+
+// ── Render: Loaded Programs (Segment + Page Tables) ────────────────────────
+function renderLoadedPrograms() {
+  const el = document.getElementById("loadedPrograms");
+  if (!el) return;
+  if (!state.loaded.length) {
+    el.innerHTML = '<p class="empty">No hay procesos en RAM.</p>';
+    return;
   }
 
-  elements.pageMap.innerHTML = cards.join("") || '<div class="empty">No hay páginas para mostrar.</div>';
+  el.innerHTML = state.loaded.map(prog => {
+    const segRows = prog.segments.map(seg => {
+      const limitFrame = seg.baseFrame + seg.pageCount - 1;
+      const physBase   = hex(seg.baseFrame * state.pageSize);
+      const physLimit  = hex(limitFrame * state.pageSize + state.pageSize - 1);
+
+      // Page table — capped to avoid DOM explosion on large segments
+      const showPT  = Math.min(seg.pageCount, MAX_PT_ENTRIES);
+      const hiddenPT = seg.pageCount - showPT;
+      const ptCells = Array.from({ length: showPT }, (_, i) => {
+        const frame = seg.baseFrame + i;
+        return `<span class="pt-cell" title="P${i} → M${frame} · ${hex(frame * state.pageSize)}">P${i}→M${frame}</span>`;
+      }).join("") + (hiddenPT > 0
+        ? `<span class="pt-cell pt-cell--more">+${hiddenPT} entradas más…</span>`
+        : "");
+
+      return `
+        <tr>
+          <td class="mono">${seg.index}</td>
+          <td><span class="seg-badge" style="border-color:${prog.color}40;color:${prog.color}">${seg.name}</span></td>
+          <td>${fmt(seg.size)}</td>
+          <td class="mono">${seg.pageCount}</td>
+          <td class="mono">${physBase}</td>
+          <td class="mono">${physLimit}</td>
+          <td>
+            <button class="ghost tiny" data-toggle-pt="${prog.loadId}-${seg.index}">▼ páginas</button>
+          </td>
+        </tr>
+        <tr class="pt-row" id="pt-${prog.loadId}-${seg.index}" hidden>
+          <td colspan="7">
+            <div class="pt-grid">${ptCells}</div>
+          </td>
+        </tr>
+      `;
+    }).join("");
+
+    return `
+      <div class="loaded-card">
+        <div class="loaded-head">
+          <div class="loaded-title">
+            <span class="loaded-dot" style="background:${prog.color}"></span>
+            <strong>${prog.name}</strong>
+            <span class="loaded-meta">${prog.totalPages} marcos · ${fmt(prog.totalPages * state.pageSize)}</span>
+          </div>
+          <button class="danger-ghost small" data-unload="${prog.loadId}">Descargar</button>
+        </div>
+        <div class="table-wrap">
+          <table class="seg-table">
+            <thead>
+              <tr>
+                <th>Seg#</th><th>Nombre</th><th>Tamaño</th>
+                <th>Páginas</th><th>Base física</th><th>Límite físico</th><th></th>
+              </tr>
+            </thead>
+            <tbody>${segRows}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }).join("");
 }
 
-function renderExplanation() {
-  const offsetBits = pageOffsetBits(state.pageSize);
-  const pageFieldBits = pageBits(state.pageSize);
-  const segBits = segmentBits();
-  const totalPages = TOTAL_LOGICAL_BYTES / state.pageSize;
+// ── Render: Translation Selects ────────────────────────────────────────────
+function renderTranslationSelects() {
+  const progSel = document.getElementById("transProgram");
+  const segSel  = document.getElementById("transSegment");
+  if (!progSel || !segSel) return;
 
-  elements.explanationText.innerHTML = `
-    <div>
-      En un sistema con direccionamiento lógico de <strong>2<sup>32</sup> bytes</strong>, el espacio de direcciones alcanza ${formatBytes(TOTAL_LOGICAL_BYTES)}.
-      La técnica de segmentación paginada organiza esa capacidad en una dirección lógica de ${LOGICAL_BITS} bits con tres campos claramente diferenciados:
+  if (!state.loaded.length) {
+    progSel.innerHTML = '<option value="">— carga un proceso primero —</option>';
+    segSel.innerHTML  = '<option value="">—</option>';
+    return;
+  }
+
+  progSel.innerHTML = state.loaded.map(p =>
+    `<option value="${p.loadId}">${p.name}</option>`
+  ).join("");
+
+  const prog = state.loaded.find(p => p.loadId === Number(progSel.value)) || state.loaded[0];
+  if (prog) {
+    segSel.innerHTML = prog.segments.map(s =>
+      `<option value="${s.index}">${s.index} — ${s.name} (${fmt(s.size)})</option>`
+    ).join("");
+    const off = document.getElementById("transOffset");
+    if (off) off.max = String(prog.segments[0]?.size - 1 ?? 0);
+  }
+}
+
+// ── Render: Translation Result ─────────────────────────────────────────────
+function renderTranslationResult() {
+  const el      = document.getElementById("transResult");
+  const progId  = Number(document.getElementById("transProgram")?.value);
+  const segIdx  = Number(document.getElementById("transSegment")?.value);
+  const offset  = Number(document.getElementById("transOffset")?.value ?? 0);
+  if (!el) return;
+
+  const prog = state.loaded.find(p => p.loadId === progId);
+  if (!prog) { el.innerHTML = '<p class="empty">Selecciona un proceso cargado.</p>'; return; }
+
+  const seg = prog.segments[segIdx];
+  if (!seg) { el.innerHTML = '<p class="empty">Selecciona un segmento válido.</p>'; return; }
+
+  if (offset < 0 || offset >= seg.size) {
+    el.innerHTML = `<div class="trans-error">El offset <strong>${offset}</strong> está fuera del rango del segmento <strong>${seg.name}</strong> (0 – ${seg.size - 1}).</div>`;
+    return;
+  }
+
+  const ob      = offBits();
+  const pb      = pgBits();
+  const sb      = segBitsCount();
+  const pageNum = Math.floor(offset / state.pageSize);
+  const pageOff = offset % state.pageSize;
+  const frameNum = seg.baseFrame + pageNum;
+  const physAddr = frameNum * state.pageSize + pageOff;
+  const logAddr  = (segIdx << (pb + ob)) | (pageNum << ob) | pageOff;
+
+  const sBin = bin(segIdx,  sb);
+  const pBin = bin(pageNum, pb);
+  const oBin = bin(pageOff, ob);
+
+  el.innerHTML = `
+    <div class="trans-cards">
+      <div class="trans-card trans-card--logic">
+        <span>Dirección lógica</span>
+        <strong>${hex(logAddr)}</strong>
+        <small class="mono">${bin(logAddr, LOGICAL_BITS)}</small>
+      </div>
+      <div class="trans-card">
+        <span>Segmento</span>
+        <strong>${seg.name} (S${segIdx})</strong>
+        <small>${fmt(seg.size)} · ${seg.pageCount} páginas</small>
+      </div>
+      <div class="trans-card">
+        <span>Página → Marco</span>
+        <strong>P${pageNum} → M${frameNum}</strong>
+        <small>Offset dentro de la página: ${pageOff} bytes</small>
+      </div>
+      <div class="trans-card trans-card--phys">
+        <span>Dirección física</span>
+        <strong>${hex(physAddr)}</strong>
+        <small>M${frameNum} × ${fmt(state.pageSize)} + ${pageOff}</small>
+      </div>
     </div>
-    <div class="formula">
-      [ ${segBits} bits de segmento ] + [ ${pageFieldBits} bits de página ] + [ ${offsetBits} bits de desplazamiento ] = ${LOGICAL_BITS} bits
-    </div>
-    <div>
-      El selector de segmento consume ${segBits} bits y permite identificar hasta ${2 ** segBits} segmentos independientes.
-      Los bits restantes se asignan al número de página dentro del segmento y al desplazamiento interno de la página, cuyo tamaño depende de la política de paginación.
-    </div>
-    <div>
-      Si el tamaño de página es ${formatBytes(state.pageSize)}, el desplazamiento ocupa ${offsetBits} bits y cada segmento queda dividido en páginas de ese tamaño.
-      Durante la traducción, el hardware o el sistema operativo consulta la tabla asociada al segmento para obtener el marco físico correspondiente.
-    </div>
-    <div>
-      En consecuencia, la traducción completa sigue esta secuencia: <strong>segmento → página → marco físico → dirección física</strong>.
-      Con la configuración actual, el espacio lógico contiene hasta ${totalPages.toLocaleString("es-ES")} páginas potenciales.
+
+    <div class="bit-diagram">
+      <div class="bd-title">Descomposición de la dirección lógica · ${LOGICAL_BITS} bits</div>
+      <div class="bd-bar">
+        <div class="bd-field bd--seg"  style="flex:${sb}"><span class="bd-name">Segmento</span><span class="bd-count">${sb} bits</span></div>
+        <div class="bd-field bd--page" style="flex:${pb}"><span class="bd-name">Página</span><span class="bd-count">${pb} bits</span></div>
+        <div class="bd-field bd--off"  style="flex:${ob}"><span class="bd-name">Offset</span><span class="bd-count">${ob} bits</span></div>
+      </div>
+      <div class="bd-cells">
+        ${sBin.split("").map(b => `<span class="bdc bdc--seg">${b}</span>`).join("")}
+        ${pBin.split("").map(b => `<span class="bdc bdc--page">${b}</span>`).join("")}
+        ${oBin.split("").map(b => `<span class="bdc bdc--off">${b}</span>`).join("")}
+      </div>
+      <div class="bd-bar bd-vals">
+        <div class="bd-val bv--seg"  style="flex:${sb}"><code>${sBin}</code><span>${seg.name} (S${segIdx})</span></div>
+        <div class="bd-val bv--page" style="flex:${pb}"><code>${pBin}</code><span>P${pageNum} → M${frameNum}</span></div>
+        <div class="bd-val bv--off"  style="flex:${ob}"><code>${oBin}</code><span>+${pageOff} B</span></div>
+      </div>
+      <div class="bd-formula">
+        <span class="bdf-label">Dir. física</span>
+        <span>=</span>
+        <span class="bdf-term bdf--page">M${frameNum} × ${fmt(state.pageSize)}</span>
+        <span>+</span>
+        <span class="bdf-term bdf--off">offset ${pageOff}</span>
+        <span>=</span>
+        <span class="bdf-term bdf--result">${hex(physAddr)}</span>
+      </div>
     </div>
   `;
 }
 
-function setMessage(text, type = "") {
-  elements.messageBox.className = `message-box ${type}`.trim();
-  elements.messageBox.innerHTML = text;
+// ── Render: Explanation ────────────────────────────────────────────────────
+function renderExplanation() {
+  const el = document.getElementById("explanationText");
+  if (!el) return;
+  const sb = segBitsCount(), pb = pgBits(), ob = offBits();
+  const tf = totalFrames();
+
+  el.innerHTML = `
+    <p>
+      En la <strong>segmentación paginada</strong>, cada proceso tiene su propio espacio de
+      direcciones lógicas de ${LOGICAL_BITS} bits dividido en tres campos:
+    </p>
+    <div class="exp-formula">
+      [ ${sb} bits · segmento ] + [ ${pb} bits · página ] + [ ${ob} bits · desplazamiento ] = ${LOGICAL_BITS} bits
+    </div>
+    <ul>
+      <li><strong>${sb} bits de segmento</strong>: identifican uno de ${2 ** sb} segmentos
+          (Código, Datos, BSS, Heap, Stack). Cada segmento tiene su propia tabla de páginas.</li>
+      <li><strong>${pb} bits de número de página</strong>: indican cuál de las hasta
+          ${(2 ** pb).toLocaleString("es")} páginas del segmento se accede.</li>
+      <li><strong>${ob} bits de desplazamiento</strong>: byte exacto dentro de la página de ${fmt(state.pageSize)}.</li>
+    </ul>
+    <p>
+      La <strong>RAM física</strong> de 2<sup>32</sup> bytes se divide en
+      <strong>${tf.toLocaleString("es")} marcos</strong> de ${fmt(state.pageSize)}.
+      Cuando se carga un proceso, el sistema operativo asigna marcos contiguos a cada segmento.
+      La <em>tabla de segmentos</em> guarda el marco base de cada segmento, y la <em>tabla de páginas</em>
+      de ese segmento mapea cada página lógica a un marco físico.
+    </p>
+    <p>
+      Traducción completa:
+      <strong>dirección lógica → (segmento + página + offset) → marco físico → dirección física</strong>.
+    </p>
+  `;
 }
 
-function renderTranslation() {
-  const segmentIndex = Number(elements.segmentSelect.value);
-  state.selectedSegmentIndex = segmentIndex;
-  updateSegmentFromInputs();
-
-  const segment = state.segments[segmentIndex];
-  const logicalOffset = Number(elements.offsetInput.value || 0);
-  const pageCount = getSegmentPageCount(segment);
-
-  if (logicalOffset < 0 || logicalOffset >= segment.size) {
-    setMessage(
-      `El desplazamiento ingresado excede el límite del segmento <strong>${segment.name}</strong>. Su rango válido es de <strong>0</strong> a <strong>${segment.size - 1}</strong>.`,
-      "error",
-    );
-    return;
-  }
-
-  const translation = createTranslation(segmentIndex, logicalOffset);
-  const segmentBitsValue = segmentIndex.toString(2).padStart(segmentBits(), "0");
-  const pageBitsValue = translation.pageIndex.toString(2).padStart(pageBits(state.pageSize), "0");
-  const offsetBitsValue = translation.pageOffset.toString(2).padStart(pageOffsetBits(state.pageSize), "0");
-  const logicalBase = getSegmentLogicalBase(segmentIndex);
-
-  elements.logicalAddress.textContent = formatHex(translation.logicalAddress);
-  elements.logicalBits.textContent = `${formatBinary(translation.logicalAddress)} · S${segmentBitsValue} | P${pageBitsValue} | O${offsetBitsValue}`;
-  elements.segmentResult.textContent = `${segment.name} (${segmentIndex})`;
-  elements.segmentRange.textContent = `Base lógica ${formatHex(logicalBase)} · límite ${formatHex(logicalBase + segment.size - 1)} · ${pageCount} páginas`;
-  elements.pageResult.textContent = `Página ${translation.pageIndex}`;
-  elements.offsetResult.textContent = `Offset ${translation.pageOffset} bytes dentro de la página`;
-  elements.physicalAddress.textContent = formatHex(translation.physicalAddress);
-  elements.frameResult.textContent = `Marco ${translation.frameNumber} · base física ${formatHex(translation.frameNumber * state.pageSize)}`;
-
-  setMessage(
-    `La dirección lógica se descompuso en segmento, página y desplazamiento. El segmento <strong>${segment.name}</strong> apunta al marco <strong>${translation.frameNumber}</strong>, y la dirección física final es <strong>${formatHex(translation.physicalAddress)}</strong>.`,
-    "success",
-  );
-
-  renderPageMap(segmentIndex);
-  renderProcessMemoryMap();
+// ── Render: All ────────────────────────────────────────────────────────────
+function renderAll() {
+  renderHeroStats();
+  renderBitBreakdown();
+  renderCatalog();
+  renderRAMOverview();
+  renderFrameMap();
+  renderRAMLegend();
+  renderLoadedPrograms();
+  renderTranslationSelects();
   renderExplanation();
 }
 
-function resetExample() {
-  state.pageSize = 4096;
-  state.selectedProgramIndex = 0;
-  applyProcessProgram(0);
-  state.selectedSegmentIndex = 0;
-  elements.pageSize.value = "4096";
-  elements.segmentSelect.value = "0";
-  elements.offsetInput.value = "1024";
-  elements.frameBaseInput.value = String(state.segments[0].baseFrame);
-  renderProcessSummary();
-  renderProcessMemoryMap();
+// ── Toast ──────────────────────────────────────────────────────────────────
+function toast(msg, type = "info") {
+  const el = document.getElementById("toast");
+  if (!el) return;
+  el.className  = `toast toast--${type}`;
+  el.textContent = msg;
+  el.hidden     = false;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.hidden = true; }, 3200);
 }
 
-function randomExample() {
-  const pageSizes = [4096, 8192, 16384];
-  state.pageSize = pageSizes[Math.floor(Math.random() * pageSizes.length)];
-  elements.pageSize.value = String(state.pageSize);
+// ── Events ─────────────────────────────────────────────────────────────────
+function setupEvents() {
 
-  state.selectedSegmentIndex = Math.floor(Math.random() * state.segments.length);
-  elements.segmentSelect.value = String(state.selectedSegmentIndex);
-
-  const selected = getSelectedSegment();
-  const maxOffset = Math.max(selected.size - 1, 0);
-  const pageIndex = Math.floor(Math.random() * Math.max(getSegmentPageCount(selected), 1));
-  const randomOffset = Math.min(pageIndex * state.pageSize + Math.floor(Math.random() * state.pageSize), maxOffset);
-  elements.offsetInput.value = String(randomOffset);
-  elements.frameBaseInput.value = String(selected.baseFrame);
-
-  renderSegmentsTable();
-  renderPageMap(state.selectedSegmentIndex);
-  renderProcessMemoryMap();
-  renderTranslation();
-}
-
-function bootstrap() {
-  renderProcessCatalog();
-  createSegmentInputs();
-  createSegmentOptions();
-  renderSegmentsTable();
-  renderProcessSummary();
-  renderProcessMemoryMap();
-  renderExplanation();
-  renderPageMap(0);
-  renderTranslation();
-
-  elements.processCatalog?.addEventListener("click", (event) => {
-    const card = event.target.closest("[data-pick-key]");
-    if (!card) return;
-    const program = state.programs.find((item) => String(item.key) === card.getAttribute("data-pick-key"));
-    if (!program) return;
-    applyProcessProgram(state.programs.findIndex((item) => item.key === program.key));
-  });
-
-  elements.processCatalog?.addEventListener("keydown", (event) => {
-    const card = event.target.closest(".process-card");
-    if (!card || (event.key !== "Enter" && event.key !== " ")) return;
-    event.preventDefault();
-    const program = state.programs.find((item) => String(item.key) === card.getAttribute("data-pick-key"));
-    if (!program) return;
-    applyProcessProgram(state.programs.findIndex((item) => item.key === program.key));
-  });
-
-  elements.processForm?.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const formData = new FormData(event.target);
-    const program = {
-      name: String(formData.get("name") || "Nuevo proceso"),
-      txt: Number(formData.get("txt") || 1),
-      data: Number(formData.get("data") || 1),
-      bss: Number(formData.get("bss") || 1),
-      heap: Number(formData.get("heap") || 131072),
-      stack: Number(formData.get("stack") || 65536),
-    };
-
-    if (program.txt <= 0 || program.data < 0 || program.bss < 0 || program.heap <= 0 || program.stack <= 0) {
-      setMessage("Los tamaños del proceso deben ser válidos y mayores que cero en txt, heap y stack.", "error");
+  // Load program from catalog
+  document.getElementById("catalog")?.addEventListener("click", e => {
+    const btn = e.target.closest("[data-load-key]");
+    if (btn) {
+      const key   = Number(btn.dataset.loadKey);
+      const entry = state.catalog.find(p => p.key === key);
+      if (!entry) return;
+      const result = loadProgram(entry);
+      if (!result) {
+        toast("RAM insuficiente para cargar este proceso.", "error");
+      } else {
+        toast(`"${entry.name}" cargado en RAM.`, "ok");
+      }
+      renderAll();
       return;
     }
 
-    const newIndex = addProcessProfile(program);
-    event.target.reset();
-    applyProcessProgram(newIndex);
-    setMessage(
-      `El proceso <strong>${program.name}</strong> se guardó en el catálogo local del navegador. Usa <strong>Descargar JSON</strong> si quieres generar el archivo actualizado.`,
-      "success",
-    );
+    // Delete from catalog
+    const del = e.target.closest("[data-del-key]");
+    if (del) {
+      const key = Number(del.dataset.delKey);
+      state.catalog = state.catalog.filter(p => p.key !== key);
+      saveCatalog();
+      renderAll();
+    }
   });
 
-  elements.saveProgramsBtn?.addEventListener("click", () => {
-    const saved = saveProgramsToStorage(state.programs);
-    setMessage(
-      saved
-        ? "El catálogo de procesos quedó guardado en el navegador."
-        : "No se pudo guardar en el navegador por una limitación del entorno.",
-      saved ? "success" : "error",
-    );
+  // Unload program from RAM
+  document.getElementById("loadedPrograms")?.addEventListener("click", e => {
+    const btn = e.target.closest("[data-unload]");
+    if (!btn) return;
+    const loadId = Number(btn.dataset.unload);
+    const prog   = state.loaded.find(p => p.loadId === loadId);
+    unloadProgram(loadId);
+    if (prog) toast(`"${prog.name}" descargado de RAM.`, "ok");
+    renderAll();
   });
 
-  elements.exportProgramsBtn?.addEventListener("click", () => {
-    downloadProgramsJson(state.programs);
-    setMessage("Se generó una descarga con el catálogo actual en formato JSON.", "success");
+  // Toggle page table row
+  document.getElementById("loadedPrograms")?.addEventListener("click", e => {
+    const btn = e.target.closest("[data-toggle-pt]");
+    if (!btn) return;
+    const row = document.getElementById(`pt-${btn.dataset.togglePt}`);
+    if (row) {
+      row.hidden = !row.hidden;
+      btn.textContent = row.hidden ? "▼ páginas" : "▲ páginas";
+    }
   });
 
-  elements.restoreProgramsBtn?.addEventListener("click", async () => {
-    localStorage.removeItem(PROGRAM_STORAGE_KEY);
-    await loadPrograms();
-    applyProcessProgram(0);
-    setMessage("Se restauró el catálogo base desde programas.json.", "success");
+  // Clear RAM
+  document.getElementById("clearRamBtn")?.addEventListener("click", () => {
+    clearRAM();
+    toast("RAM limpiada.", "ok");
+    renderAll();
   });
 
-  elements.pageSize.addEventListener("change", () => {
-    state.pageSize = Number(elements.pageSize.value);
-    const selected = getSelectedSegment();
-    elements.offsetInput.value = String(Math.min(Number(elements.offsetInput.value || 0), selected.size - 1));
-    renderTranslation();
+  // Export JSON
+  document.getElementById("exportBtn")?.addEventListener("click", () => {
+    const blob = new Blob([JSON.stringify(state.catalog, null, 2)], { type: "application/json" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href = url; a.download = "programas.json"; a.click();
+    URL.revokeObjectURL(url);
+    toast("JSON descargado.", "ok");
   });
 
-  elements.segmentSelect.addEventListener("change", () => {
-    state.selectedSegmentIndex = Number(elements.segmentSelect.value);
-    const selected = getSelectedSegment();
-    elements.offsetInput.value = String(Math.min(Number(elements.offsetInput.value || 0), selected.size - 1));
-    elements.frameBaseInput.value = String(selected.baseFrame);
-    renderPageMap(state.selectedSegmentIndex);
-    renderTranslation();
+  // Add to catalog
+  document.getElementById("addForm")?.addEventListener("submit", e => {
+    e.preventDefault();
+    const fd  = new FormData(e.target);
+    const maxKey = state.catalog.reduce((m, p) => Math.max(m, p.key), 0);
+    const entry = {
+      key:   maxKey + 1,
+      name:  String(fd.get("name") || "Proceso"),
+      txt:   Math.max(1, Number(fd.get("txt"))),
+      data:  Math.max(0, Number(fd.get("data"))),
+      bss:   Math.max(0, Number(fd.get("bss"))),
+      heap:  Math.max(1, Number(fd.get("heap"))),
+      stack: Math.max(1, Number(fd.get("stack"))),
+    };
+    state.catalog.push(entry);
+    saveCatalog();
+    e.target.reset();
+    toast(`"${entry.name}" agregado al catálogo.`, "ok");
+    renderCatalog();
   });
 
-  elements.offsetInput.addEventListener("input", renderTranslation);
-  elements.frameBaseInput.addEventListener("input", () => {
-    getSelectedSegment().baseFrame = Math.max(0, Number(elements.frameBaseInput.value || 0));
-    renderPageMap(state.selectedSegmentIndex);
-    renderTranslation();
+  // Page size change
+  document.getElementById("pageSize")?.addEventListener("change", e => {
+    if (state.loaded.length) {
+      toast("No se puede cambiar el tamaño de página con procesos cargados.", "error");
+      e.target.value = String(state.pageSize);
+      return;
+    }
+    state.pageSize = Number(e.target.value);
+    renderAll();
   });
 
-  elements.segmentInputs.addEventListener("input", () => {
-    updateSegmentFromInputs();
-    createSegmentOptions();
-    renderSegmentsTable();
-    renderPageMap(state.selectedSegmentIndex);
-    renderProcessMemoryMap();
-    renderTranslation();
+  // Translation: update segment list when program changes
+  document.getElementById("transProgram")?.addEventListener("change", () => {
+    const progId = Number(document.getElementById("transProgram").value);
+    const prog   = state.loaded.find(p => p.loadId === progId);
+    const segSel = document.getElementById("transSegment");
+    if (prog && segSel) {
+      segSel.innerHTML = prog.segments.map(s =>
+        `<option value="${s.index}">${s.index} — ${s.name} (${fmt(s.size)})</option>`
+      ).join("");
+    }
   });
 
-  elements.translateBtn.addEventListener("click", renderTranslation);
-  elements.randomBtn.addEventListener("click", randomExample);
-  elements.resetBtn.addEventListener("click", resetExample);
+  // Translation: update max offset when segment changes
+  document.getElementById("transSegment")?.addEventListener("change", () => {
+    const progId = Number(document.getElementById("transProgram").value);
+    const segIdx = Number(document.getElementById("transSegment").value);
+    const prog   = state.loaded.find(p => p.loadId === progId);
+    const seg    = prog?.segments[segIdx];
+    const off    = document.getElementById("transOffset");
+    if (seg && off) {
+      off.max = String(seg.size - 1);
+      if (Number(off.value) >= seg.size) off.value = "0";
+    }
+  });
+
+  document.getElementById("transBtn")?.addEventListener("click", renderTranslationResult);
 }
 
+// ── Init ───────────────────────────────────────────────────────────────────
 async function init() {
-  await loadPrograms();
-  renderProcessCatalog();
-  applyProcessProgram(0);
-  bootstrap();
+  initCatalog();
+  // Try to enrich catalog from JSON if localStorage was empty
+  const hadStored = Boolean(localStorage.getItem(STORAGE_KEY));
+  if (!hadStored) await tryLoadFromJson();
+  setupEvents();
+  renderAll();
 }
 
 init();
